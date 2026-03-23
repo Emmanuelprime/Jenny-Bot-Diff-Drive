@@ -1,0 +1,192 @@
+#include <MPU6050_tockn.h>
+#include <Wire.h>
+
+MPU6050 mpu6050(Wire);
+
+#define LEFT_SPD_PIN 16
+#define LEFT_DIR1_PIN 17
+#define LEFT_DIR2_PIN 18
+#define RIGHT_SPD_PIN 25
+#define RIGHT_DIR1_PIN 26
+#define RIGHT_DIR2_PIN 27
+#define ENCODER_RIGHT_A 34 
+#define ENCODER_RIGHT_B 35
+#define ENCODER_LEFT_A 32 
+#define ENCODER_LEFT_B 33 
+
+volatile long right_encoder_count = 0;
+volatile long left_encoder_count = 0;
+
+const int MAX_PWM = 255;
+const int BASE_PWM = 170;
+
+
+const float WHEEL_RADIUS = 4.2; // cm
+const float WHEEL_BASE = 31.5; // cm
+const float ENCODER_TICKS_PER_REV = 207.0;
+float left_distance = 0.0;
+float right_distance = 0.0;
+float x = 0.0;
+float y = 0.0;
+float theta = 0.0;
+float mpu_angle = 0.0;
+
+long last_left_count = 0;
+long last_right_count = 0;
+unsigned long last_time = 0;
+unsigned long sample_time = 100; // ms
+
+
+float desired_heading = 0.0; // radians
+float target_x = 100.0; // cm
+float target_y = 100.0; // cm
+const float DISTANCE_THRESHOLD = 5.0; // cm
+float Kp_heading = 55.0;
+
+float robot_velocity = 0.0; // cm/s
+float Kp_velocity = 2.0;
+
+
+
+void IRAM_ATTR right_encoder_ISR() {
+    if (digitalRead(ENCODER_RIGHT_B)) right_encoder_count--;
+    else right_encoder_count++;
+}
+
+void IRAM_ATTR left_encoder_ISR() {
+    if (digitalRead(ENCODER_LEFT_B)) left_encoder_count++;
+    else left_encoder_count--;
+}
+
+void initIMU() {
+    Wire.begin();
+    mpu6050.begin();
+    mpu6050.calcGyroOffsets(true);
+}
+
+void initMotorPins() {
+    pinMode(LEFT_SPD_PIN, OUTPUT);
+    pinMode(LEFT_DIR1_PIN, OUTPUT);
+    pinMode(LEFT_DIR2_PIN, OUTPUT);
+    pinMode(RIGHT_SPD_PIN, OUTPUT);
+    pinMode(RIGHT_DIR1_PIN, OUTPUT);
+    pinMode(RIGHT_DIR2_PIN, OUTPUT);
+}
+
+void initEncoders() {
+    pinMode(ENCODER_RIGHT_A, INPUT_PULLUP);
+    pinMode(ENCODER_RIGHT_B, INPUT_PULLUP);
+    pinMode(ENCODER_LEFT_A, INPUT_PULLUP);
+    pinMode(ENCODER_LEFT_B, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(ENCODER_RIGHT_A), right_encoder_ISR, RISING);
+    attachInterrupt(digitalPinToInterrupt(ENCODER_LEFT_A), left_encoder_ISR, RISING);
+}
+
+void setMotor(int leftPWM, int rightPWM) {
+    if (leftPWM > 0) {
+        digitalWrite(LEFT_DIR1_PIN, LOW);
+        digitalWrite(LEFT_DIR2_PIN, HIGH);
+    } else if (leftPWM < 0) {
+        digitalWrite(LEFT_DIR1_PIN, HIGH);
+        digitalWrite(LEFT_DIR2_PIN, LOW);
+    } else {
+        digitalWrite(LEFT_DIR1_PIN, LOW);
+        digitalWrite(LEFT_DIR2_PIN, LOW);
+    }
+    
+    if (rightPWM > 0) {
+        digitalWrite(RIGHT_DIR1_PIN, LOW);
+        digitalWrite(RIGHT_DIR2_PIN, HIGH);
+    } else if (rightPWM < 0) {
+        digitalWrite(RIGHT_DIR1_PIN, HIGH);
+        digitalWrite(RIGHT_DIR2_PIN, LOW);
+    } else {
+        digitalWrite(RIGHT_DIR1_PIN, LOW);
+        digitalWrite(RIGHT_DIR2_PIN, LOW);
+    }
+    
+    analogWrite(LEFT_SPD_PIN, constrain(abs(leftPWM), 0, MAX_PWM));
+    analogWrite(RIGHT_SPD_PIN, constrain(abs(rightPWM), 0, MAX_PWM));
+}
+
+void setup() {
+    Serial.begin(115200);
+    initIMU();
+    initMotorPins();
+    initEncoders();
+    Serial.println("System initialized.");
+}
+
+void loop() {
+    mpu6050.update();
+    mpu_angle = mpu6050.getAngleZ() * PI / 180.0;
+    while (mpu_angle > PI) mpu_angle -= 2 * PI;
+    while (mpu_angle < -PI) mpu_angle += 2 * PI;
+    
+    unsigned long current_time = millis();
+    if (current_time - last_time >= sample_time) {
+        Odometry();
+        goToGoal();
+        
+        Serial.print(x, 2);
+        Serial.print(" ");
+        Serial.print(y, 2);
+        Serial.print(" ");
+        Serial.print(theta, 4);
+        Serial.print(" ");
+        Serial.print(mpu_angle, 4);
+        Serial.println();
+        last_time = current_time;
+    }
+}
+
+void Odometry(){
+    long current_left_count = left_encoder_count;
+    long current_right_count = right_encoder_count;
+
+    long delta_left = current_left_count - last_left_count;
+    long delta_right = current_right_count - last_right_count;
+
+    last_left_count = current_left_count;
+    last_right_count = current_right_count;
+
+    left_distance = (delta_left / ENCODER_TICKS_PER_REV) * (2 * PI * WHEEL_RADIUS);
+    right_distance = (delta_right / ENCODER_TICKS_PER_REV) * (2 * PI * WHEEL_RADIUS);
+
+    float delta_theta = (right_distance - left_distance) / WHEEL_BASE;
+
+    float delta_x = ((left_distance + right_distance) / 2) * cos(theta + delta_theta / 2.0);
+    float delta_y = ((left_distance + right_distance) / 2) * sin(theta + delta_theta / 2.0);
+
+    x += delta_x;
+    y += delta_y;
+    
+    theta += delta_theta;
+
+    while (theta > PI) theta -= 2 * PI;
+    while (theta < -PI) theta += 2 * PI;
+
+}
+
+void goToGoal(){
+    float distance_to_goal = sqrt(pow(target_x - x, 2) + pow(target_y - y, 2));
+    
+    if (distance_to_goal > DISTANCE_THRESHOLD) {
+        float base_speed = Kp_velocity * distance_to_goal;
+        base_speed = constrain(base_speed, 0, BASE_PWM);
+        
+        desired_heading = atan2(target_y - y, target_x - x);
+        float heading_error = desired_heading - mpu_angle;
+        while (heading_error > PI) heading_error -= 2 * PI;
+        while (heading_error < -PI) heading_error += 2 * PI;
+        
+        float correction = Kp_heading * heading_error;
+
+        int leftPWM = base_speed - correction;
+        int rightPWM = base_speed + correction;
+        
+        setMotor(leftPWM, rightPWM);
+    } else {
+        setMotor(0, 0);
+    }
+}
