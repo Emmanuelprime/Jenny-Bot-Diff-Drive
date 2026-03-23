@@ -46,7 +46,10 @@ float Kp_heading = 55.0;
 float robot_velocity = 0.0; // cm/s
 float Kp_velocity = 2.0;
 
+float left_velocity = 0.0;
+float right_velocity = 0.0;
 
+float K_balance = 1.0;
 
 void IRAM_ATTR right_encoder_ISR() {
     if (digitalRead(ENCODER_RIGHT_B)) right_encoder_count--;
@@ -150,8 +153,13 @@ void Odometry(){
     last_left_count = current_left_count;
     last_right_count = current_right_count;
 
+    float dt = sample_time / 1000.0;  // seconds
+
     left_distance = (delta_left / ENCODER_TICKS_PER_REV) * (2 * PI * WHEEL_RADIUS);
     right_distance = (delta_right / ENCODER_TICKS_PER_REV) * (2 * PI * WHEEL_RADIUS);
+
+    left_velocity = left_distance / dt;
+    right_velocity = right_distance / dt;
 
     float delta_theta = (right_distance - left_distance) / WHEEL_BASE;
 
@@ -165,18 +173,19 @@ void Odometry(){
 
     while (theta > PI) theta -= 2 * PI;
     while (theta < -PI) theta += 2 * PI;
-
 }
 
 void goToGoal(){
     float distance_to_goal = sqrt(pow(target_x - x, 2) + pow(target_y - y, 2));
     
     if (distance_to_goal > DISTANCE_THRESHOLD) {
+
         float base_speed = Kp_velocity * distance_to_goal;
         base_speed = constrain(base_speed, 0, BASE_PWM);
         
         desired_heading = atan2(target_y - y, target_x - x);
         float heading_error = desired_heading - mpu_angle;
+
         while (heading_error > PI) heading_error -= 2 * PI;
         while (heading_error < -PI) heading_error += 2 * PI;
         
@@ -184,8 +193,17 @@ void goToGoal(){
 
         int leftPWM = base_speed - correction;
         int rightPWM = base_speed + correction;
-        
+
+        float vel_error = (left_velocity - right_velocity);
+
+        leftPWM -= K_balance * vel_error;
+        rightPWM += K_balance * vel_error;
+
+        leftPWM = constrain(leftPWM, -MAX_PWM, MAX_PWM);
+        rightPWM = constrain(rightPWM, -MAX_PWM, MAX_PWM);
+
         setMotor(leftPWM, rightPWM);
+
     } else {
         setMotor(0, 0);
     }
