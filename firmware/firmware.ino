@@ -18,7 +18,7 @@ volatile long right_encoder_count = 0;
 volatile long left_encoder_count = 0;
 
 const int MAX_PWM = 255;
-const int BASE_PWM = 170;
+const int BASE_PWM = 150;
 
 
 const float WHEEL_RADIUS = 4.2; // cm
@@ -36,20 +36,35 @@ long last_right_count = 0;
 unsigned long last_time = 0;
 unsigned long sample_time = 100; // ms
 
-
-float desired_heading = 0.0; // radians
-float target_x = 100.0; // cm
+// Go-to-goal parameters
+bool goal_reached = false;
+float target_x = 0.0; // cm
 float target_y = 100.0; // cm
 const float DISTANCE_THRESHOLD = 5.0; // cm
-float Kp_heading = 55.0;
+const float MAX_LINEAR_VEL = 50.0; // cm/s
+const float MAX_ANGULAR_VEL = 2.0; // rad/s
+float Kp_linear = 2.5; //0.5
+float Kp_angular = 1.5; //1.5
 
-float robot_velocity = 0.0; // cm/s
-float Kp_velocity = 2.0;
+// Wheel velocities
+float left_velocity = 0.0; // measured cm/s
+float right_velocity = 0.0; // measured cm/s
+float target_left_velocity = 0.0; // desired cm/s
+float target_right_velocity = 0.0; // desired cm/s
 
-float left_velocity = 0.0;
-float right_velocity = 0.0;
+// PID controller state for left wheel
+float left_error_sum = 0.0;
+float left_last_error = 0.0;
+float Kp_left = 5.0;
+float Ki_left = 0.05;
+float Kd_left = 0.1;
 
-float K_balance = 1.0;
+// PID controller state for right wheel
+float right_error_sum = 0.0;
+float right_last_error = 0.0;
+float Kp_right = 5.0;
+float Ki_right = 0.05;
+float Kd_right = 0.1;
 
 void IRAM_ATTR right_encoder_ISR() {
     if (digitalRead(ENCODER_RIGHT_B)) right_encoder_count--;
@@ -130,6 +145,7 @@ void loop() {
     if (current_time - last_time >= sample_time) {
         Odometry();
         goToGoal();
+        if (!goal_reached) wheelVelocityControl();
         
         Serial.print(x, 2);
         Serial.print(" ");
@@ -179,32 +195,50 @@ void goToGoal(){
     float distance_to_goal = sqrt(pow(target_x - x, 2) + pow(target_y - y, 2));
     
     if (distance_to_goal > DISTANCE_THRESHOLD) {
-
-        float base_speed = Kp_velocity * distance_to_goal;
-        base_speed = constrain(base_speed, 0, BASE_PWM);
+        float v = Kp_linear * distance_to_goal;
+        v = constrain(v, 0.0f, MAX_LINEAR_VEL);
         
-        desired_heading = atan2(target_y - y, target_x - x);
+        float desired_heading = atan2(target_y - y, target_x - x);
         float heading_error = desired_heading - mpu_angle;
-
         while (heading_error > PI) heading_error -= 2 * PI;
         while (heading_error < -PI) heading_error += 2 * PI;
         
-        float correction = Kp_heading * heading_error;
-
-        int leftPWM = base_speed - correction;
-        int rightPWM = base_speed + correction;
-
-        float vel_error = (left_velocity - right_velocity);
-
-        leftPWM -= K_balance * vel_error;
-        rightPWM += K_balance * vel_error;
-
-        leftPWM = constrain(leftPWM, -MAX_PWM, MAX_PWM);
-        rightPWM = constrain(rightPWM, -MAX_PWM, MAX_PWM);
-
-        setMotor(leftPWM, rightPWM);
-
+        float omega = Kp_angular * heading_error;
+        omega = constrain(omega, -MAX_ANGULAR_VEL, MAX_ANGULAR_VEL);
+        
+        target_left_velocity  = v - omega * (WHEEL_BASE / 2.0);
+        target_right_velocity = v + omega * (WHEEL_BASE / 2.0);
     } else {
+        target_left_velocity  = 0.0;
+        target_right_velocity = 0.0;
+        left_error_sum  = 0.0;
+        right_error_sum = 0.0;
+        left_last_error  = 0.0;
+        right_last_error = 0.0;
+        goal_reached = true;
         setMotor(0, 0);
     }
+}
+
+void wheelVelocityControl(){
+    float dt = sample_time / 1000.0f;
+
+    float left_error        = target_left_velocity - left_velocity;
+    left_error_sum         += left_error * dt;
+    float left_error_deriv  = (left_error - left_last_error) / dt;
+    float left_pwm          = Kp_left * left_error
+                            + Ki_left * left_error_sum
+                            + Kd_left * left_error_deriv;
+    left_last_error = left_error;
+
+    float right_error        = target_right_velocity - right_velocity;
+    right_error_sum         += right_error * dt;
+    float right_error_deriv  = (right_error - right_last_error) / dt;
+    float right_pwm          = Kp_right * right_error
+                             + Ki_right * right_error_sum
+                             + Kd_right * right_error_deriv;
+    right_last_error = right_error;
+
+    setMotor((int)constrain(left_pwm,  -MAX_PWM, MAX_PWM),
+             (int)constrain(right_pwm, -MAX_PWM, MAX_PWM));
 }
