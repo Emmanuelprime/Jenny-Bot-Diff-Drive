@@ -131,8 +131,6 @@ void Odometry() {
     float dt = sample_time / 1000.0;
     left_distance  = (delta_left / ENCODER_TICKS_PER_REV) * (2 * PI * WHEEL_RADIUS);
     right_distance = (delta_right / ENCODER_TICKS_PER_REV) * (2 * PI * WHEEL_RADIUS);
-    left_velocity  = left_distance / dt;
-    right_velocity = right_distance / dt;
 
     float delta_theta = (right_distance - left_distance) / WHEEL_BASE;
     float delta_x = ((left_distance + right_distance)/2.0) * cos(theta + delta_theta/2.0);
