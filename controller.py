@@ -1,6 +1,7 @@
 import serial
 import math
 import time
+import sys
 
 # ── Serial port to ESP32 ────────────────────────────────────────────────────
 SERIAL_PORT = '/dev/serial0'   # Pi Zero UART (GPIO 14 TX, GPIO 15 RX)
@@ -15,10 +16,6 @@ MAX_ANGULAR_VEL =  2.0   # rad/s
 Kp_linear  = 0.5
 Kp_angular = 1.5
 DISTANCE_THRESHOLD = 10.0  # cm
-
-# ── Goal ────────────────────────────────────────────────────────────────────
-target_x = 200.0   # cm
-target_y = 200.0   # cm
 
 # ── Loop rate ───────────────────────────────────────────────────────────────
 LOOP_HZ  = 10
@@ -66,9 +63,10 @@ def parse_state(line):
         return None
 
 
-def main():
+def main(target_x, target_y):
     ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0.05)
     print(f"Connected to ESP32 on {SERIAL_PORT}")
+    print(f"Target: ({target_x:.1f}, {target_y:.1f}) cm")
     time.sleep(1)
 
     goal_reached = False
@@ -110,7 +108,19 @@ def main():
 
 
 if __name__ == '__main__':
+    if len(sys.argv) != 3:
+        print("Usage: python controller.py <target_x> <target_y>")
+        print("Example: python controller.py 200 200")
+        sys.exit(1)
+    
     try:
-        main()
+        target_x = float(sys.argv[1])
+        target_y = float(sys.argv[2])
+    except ValueError:
+        print("Error: target_x and target_y must be numbers")
+        sys.exit(1)
+    
+    try:
+        main(target_x, target_y)
     except KeyboardInterrupt:
         print("\nStopped.")
