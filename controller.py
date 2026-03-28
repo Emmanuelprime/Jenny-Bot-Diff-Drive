@@ -10,7 +10,7 @@ WHEEL_BASE   = 31.5
 MAX_LINEAR_VEL  = 50.0
 MAX_ANGULAR_VEL =  2.0
 
-Kp_linear  = 0.5
+Kp_linear  = 1.0  # Increased for faster movement
 Kp_angular = 1.5
 DISTANCE_THRESHOLD = 5.0
 

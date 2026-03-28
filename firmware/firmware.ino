@@ -52,10 +52,10 @@ float target_right_velocity = 0.0;
 // PID
 float left_error_sum = 0.0;
 float left_last_error = 0.0;
-float Kp_left = 5.0, Ki_left = 0.05, Kd_left = 0.1;
+float Kp_left = 8.0, Ki_left = 0.1, Kd_left = 0.2;  // Increased gains
 float right_error_sum = 0.0;
 float right_last_error = 0.0;
-float Kp_right = 5.0, Ki_right = 0.05, Kd_right = 0.1;
+float Kp_right = 8.0, Ki_right = 0.1, Kd_right = 0.2;  // Increased gains
 float Kf = 3.0; // feedforward
 
 // Encoder ISRs
