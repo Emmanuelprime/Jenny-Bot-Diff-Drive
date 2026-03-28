@@ -16,7 +16,7 @@ MPU6050 mpu6050(Wire);
 
 // UART to Raspberry Pi Zero
 #define PI_RX_PIN 23
-#define PI_TX_PIN 21
+#define PI_TX_PIN 19
 #define PI_BAUD 115200
 
 // Safety watchdog: stop motors if no command received within this time
