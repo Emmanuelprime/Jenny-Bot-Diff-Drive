@@ -27,7 +27,7 @@ def go_to_goal(x, y, mpu_theta, lv, rv):
     dy = target_y - y
     distance = math.sqrt(dx*dx + dy*dy)
 
-    if distance < DISTANCE_THRESHOLD and abs(lv)<2.0 and abs(rv)<2.0:
+    if distance < DISTANCE_THRESHOLD:
         return 0.0, 0.0, True
 
     # smooth slowdown

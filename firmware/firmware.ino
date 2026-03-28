@@ -25,7 +25,7 @@ volatile long left_encoder_count = 0;
 const int MAX_PWM = 180;
 const float WHEEL_RADIUS = 4.2;        
 const float WHEEL_BASE = 31.5;         
-const float ENCODER_TICKS_PER_REV = 207.0;
+const float ENCODER_TICKS_PER_REV = 69.0;  // Calibrated based on actual movement
 const float MAX_LINEAR_VEL = 50.0;     
 
 float left_distance = 0.0;
@@ -52,11 +52,11 @@ float target_right_velocity = 0.0;
 // PID
 float left_error_sum = 0.0;
 float left_last_error = 0.0;
-float Kp_left = 8.0, Ki_left = 0.1, Kd_left = 0.2;  // Increased gains
+float Kp_left = 5.0, Ki_left = 0.0, Kd_left = 0.0;  // Reduced to prevent grinding
 float right_error_sum = 0.0;
 float right_last_error = 0.0;
-float Kp_right = 8.0, Ki_right = 0.1, Kd_right = 0.2;  // Increased gains
-float Kf = 3.0; // feedforward
+float Kp_right = 5.0, Ki_right = 0.0, Kd_right = 0.0;  // Reduced to prevent grinding
+float Kf = 1.5; // feedforward - reduced
 
 // Encoder ISRs
 void IRAM_ATTR right_encoder_ISR() {
@@ -183,6 +183,12 @@ void sendState() {
     Serial2.print(left_velocity,3); Serial2.print(',');
     Serial2.print(right_velocity,3);
     Serial2.println();
+    
+    // USB debug for calibration
+    Serial.print("Enc L:"); Serial.print(left_encoder_count);
+    Serial.print(" R:"); Serial.print(right_encoder_count);
+    Serial.print(" | Pos:("); Serial.print(x,1); Serial.print(","); Serial.print(y,1);
+    Serial.println(")");
 }
 
 // PID velocity control
