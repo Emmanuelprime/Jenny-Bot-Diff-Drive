@@ -22,7 +22,7 @@ MPU6050 mpu6050(Wire);
 volatile long right_encoder_count = 0;
 volatile long left_encoder_count = 0;
 
-const int MAX_PWM = 255;
+const int MAX_PWM = 180;
 const float WHEEL_RADIUS = 4.2;        
 const float WHEEL_BASE = 31.5;         
 const float ENCODER_TICKS_PER_REV = 207.0;
