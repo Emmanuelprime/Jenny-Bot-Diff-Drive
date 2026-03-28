@@ -3,135 +3,86 @@ import math
 import time
 import sys
 
-# ── Serial port to ESP32 ────────────────────────────────────────────────────
-SERIAL_PORT = '/dev/serial0'   # Pi Zero UART (GPIO 14 TX, GPIO 15 RX)
+SERIAL_PORT = '/dev/serial0'
 BAUD_RATE   = 115200
 
-# ── Robot parameters (must match firmware) ──────────────────────────────────
-WHEEL_BASE   = 31.5   # cm
-MAX_LINEAR_VEL  = 50.0   # cm/s
-MAX_ANGULAR_VEL =  2.0   # rad/s
+WHEEL_BASE   = 31.5
+MAX_LINEAR_VEL  = 50.0
+MAX_ANGULAR_VEL =  2.0
 
-# ── Go-to-goal gains ────────────────────────────────────────────────────────
 Kp_linear  = 0.5
 Kp_angular = 1.5
-DISTANCE_THRESHOLD = 10.0  # cm
+DISTANCE_THRESHOLD = 10.0
 
-# ── Loop rate ───────────────────────────────────────────────────────────────
 LOOP_HZ  = 10
 LOOP_DT  = 1.0 / LOOP_HZ
-
 
 def normalize_angle(angle):
     while angle >  math.pi: angle -= 2 * math.pi
     while angle < -math.pi: angle += 2 * math.pi
     return angle
 
-
-def go_to_goal(x, y, mpu_theta):
-    """Returns (v cm/s, omega rad/s, goal_reached bool)."""
+def go_to_goal(x, y, mpu_theta, lv, rv):
     dx = target_x - x
     dy = target_y - y
     distance = math.sqrt(dx*dx + dy*dy)
 
-    if distance < DISTANCE_THRESHOLD:
+    if distance < DISTANCE_THRESHOLD and abs(lv)<2.0 and abs(rv)<2.0:
         return 0.0, 0.0, True
 
-    v = Kp_linear * distance
+    # smooth slowdown
+    v = Kp_linear*distance
+    if distance < 50.0: v *= distance/50.0
     v = max(0.0, min(v, MAX_LINEAR_VEL))
 
     desired_heading = math.atan2(dy, dx)
-    heading_error   = normalize_angle(desired_heading - mpu_theta)
-
-    omega = Kp_angular * heading_error
+    heading_error = normalize_angle(desired_heading - mpu_theta)
+    omega = Kp_angular*heading_error
     omega = max(-MAX_ANGULAR_VEL, min(omega, MAX_ANGULAR_VEL))
-
     return v, omega, False
 
-
 def parse_state(line):
-    """
-    Parse ESP32 state line: x,y,theta,mpu_angle,left_vel,right_vel
-    Returns (x, y, theta, mpu_angle, lv, rv) or None on error.
-    """
     try:
         parts = line.strip().split(',')
-        if len(parts) != 6:
-            return None
+        if len(parts)!=6: return None
         return tuple(float(p) for p in parts)
-    except ValueError:
-        return None
+    except: return None
 
-
-def main(target_x, target_y):
+def main(target_x_arg, target_y_arg):
     ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0.05)
-    print(f"Connected to ESP32 on {SERIAL_PORT}")
-    print(f"Target: ({target_x:.1f}, {target_y:.1f}) cm")
-    print("Waiting for data from ESP32...")
-    time.sleep(1)
-
+    global target_x, target_y
+    target_x = target_x_arg
+    target_y = target_y_arg
     goal_reached = False
-    no_data_count = 0
 
     while True:
         loop_start = time.time()
-
-        # ── Read state from ESP32 ───────────────────────────────────────────
-        state = None
         raw = ser.readline().decode('utf-8', errors='ignore')
-        
-        if raw:
-            print(f"[DEBUG] Raw: {raw.strip()}")  # Show what we received
-            state = parse_state(raw)
+        state = parse_state(raw) if raw else None
 
         if state is None:
-            no_data_count += 1
-            if no_data_count % 20 == 1:  # Print every 2 seconds
-                print(f"[WARNING] No valid data from ESP32 (count: {no_data_count})")
-            # No valid data yet — send zero command to keep watchdog happy
             cmd = b'v:0.0,w:0.0\n'
-            print(f"[DEBUG] Sending: {cmd.decode().strip()}")
             ser.write(cmd)
-            time.sleep(max(0.0, LOOP_DT - (time.time() - loop_start)))
+            time.sleep(max(0.0, LOOP_DT - (time.time()-loop_start)))
             continue
 
-        no_data_count = 0  # Reset counter when we get good data
         x, y, theta, mpu_angle, lv, rv = state
-
-        print(f"x={x:.1f} y={y:.1f} θ={math.degrees(mpu_angle):.1f}° "
-              f"lv={lv:.1f} rv={rv:.1f}")
-
-        # ── Go-to-goal ──────────────────────────────────────────────────────
         if not goal_reached:
-            v, omega, goal_reached = go_to_goal(x, y, mpu_angle)
+            v, omega, goal_reached = go_to_goal(x, y, mpu_angle, lv, rv)
         else:
             v, omega = 0.0, 0.0
-            print("Goal reached!")
 
-        # ── Send (v, ω) to ESP32 ────────────────────────────────────────────
         cmd = f"v:{v:.3f},w:{omega:.4f}\n"
-        print(f"[DEBUG] Sending: {cmd.strip()}")
         ser.write(cmd.encode())
 
-        # ── Hold loop rate ───────────────────────────────────────────────────
         elapsed = time.time() - loop_start
         time.sleep(max(0.0, LOOP_DT - elapsed))
 
-
-if __name__ == '__main__':
-    if len(sys.argv) != 3:
+if __name__=="__main__":
+    if len(sys.argv)!=3:
         print("Usage: python controller.py <target_x> <target_y>")
-        print("Example: python controller.py 200 200")
         sys.exit(1)
-    
-    try:
-        target_x = float(sys.argv[1])
-        target_y = float(sys.argv[2])
-    except ValueError:
-        print("Error: target_x and target_y must be numbers")
-        sys.exit(1)
-    
-    try:
-        main(target_x, target_y)
-    except KeyboardInterrupt:
-        print("\nStopped.")
+    target_x = float(sys.argv[1])
+    target_y = float(sys.argv[2])
+    try: main(target_x, target_y)
+    except KeyboardInterrupt: print("\nStopped.")
