@@ -12,7 +12,7 @@ MAX_ANGULAR_VEL =  2.0
 
 Kp_linear  = 1.0  # Increased for faster movement
 Kp_angular = 1.5
-DISTANCE_THRESHOLD = 5.0
+DISTANCE_THRESHOLD = 10.0
 
 LOOP_HZ  = 10
 LOOP_DT  = 1.0 / LOOP_HZ
