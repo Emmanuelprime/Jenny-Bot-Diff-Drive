@@ -32,7 +32,7 @@ def go_to_goal(x, y, mpu_theta, lv, rv):
 
     # smooth slowdown
     v = Kp_linear*distance
-    if distance < 50.0: v *= distance/50.0
+    # if distance < 50.0: v *= distance/50.0
     v = max(0.0, min(v, MAX_LINEAR_VEL))
 
     desired_heading = math.atan2(dy, dx)
