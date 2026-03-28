@@ -67,10 +67,23 @@ def main(target_x_arg, target_y_arg):
             continue
 
         x, y, theta, mpu_angle, lv, rv = state
+        
+        # Calculate distance and heading for debugging
+        dx = target_x - x
+        dy = target_y - y
+        dist = math.sqrt(dx*dx + dy*dy)
+        desired_heading = math.atan2(dy, dx)
+        heading_error = normalize_angle(desired_heading - mpu_angle)
+        
         if not goal_reached:
             v, omega, goal_reached = go_to_goal(x, y, mpu_angle, lv, rv)
         else:
             v, omega = 0.0, 0.0
+
+        # Print debug info
+        print(f"Pos:({x:.1f},{y:.1f}) Goal:({target_x:.1f},{target_y:.1f}) "
+              f"Dist:{dist:.1f} Head:{math.degrees(mpu_angle):.1f}° "
+              f"Err:{math.degrees(heading_error):.1f}° v:{v:.1f} ω:{omega:.2f}")
 
         cmd = f"v:{v:.3f},w:{omega:.4f}\n"
         ser.write(cmd.encode())
