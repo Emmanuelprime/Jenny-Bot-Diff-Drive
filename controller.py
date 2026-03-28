@@ -67,9 +67,11 @@ def main(target_x, target_y):
     ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0.05)
     print(f"Connected to ESP32 on {SERIAL_PORT}")
     print(f"Target: ({target_x:.1f}, {target_y:.1f}) cm")
+    print("Waiting for data from ESP32...")
     time.sleep(1)
 
     goal_reached = False
+    no_data_count = 0
 
     while True:
         loop_start = time.time()
@@ -77,15 +79,23 @@ def main(target_x, target_y):
         # ── Read state from ESP32 ───────────────────────────────────────────
         state = None
         raw = ser.readline().decode('utf-8', errors='ignore')
+        
         if raw:
+            print(f"[DEBUG] Raw: {raw.strip()}")  # Show what we received
             state = parse_state(raw)
 
         if state is None:
+            no_data_count += 1
+            if no_data_count % 20 == 1:  # Print every 2 seconds
+                print(f"[WARNING] No valid data from ESP32 (count: {no_data_count})")
             # No valid data yet — send zero command to keep watchdog happy
-            ser.write(b'v:0.0,w:0.0\n')
+            cmd = b'v:0.0,w:0.0\n'
+            print(f"[DEBUG] Sending: {cmd.decode().strip()}")
+            ser.write(cmd)
             time.sleep(max(0.0, LOOP_DT - (time.time() - loop_start)))
             continue
 
+        no_data_count = 0  # Reset counter when we get good data
         x, y, theta, mpu_angle, lv, rv = state
 
         print(f"x={x:.1f} y={y:.1f} θ={math.degrees(mpu_angle):.1f}° "
@@ -100,6 +110,7 @@ def main(target_x, target_y):
 
         # ── Send (v, ω) to ESP32 ────────────────────────────────────────────
         cmd = f"v:{v:.3f},w:{omega:.4f}\n"
+        print(f"[DEBUG] Sending: {cmd.strip()}")
         ser.write(cmd.encode())
 
         # ── Hold loop rate ───────────────────────────────────────────────────
