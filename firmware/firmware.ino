@@ -22,11 +22,10 @@ MPU6050 mpu6050(Wire);
 volatile long right_encoder_count = 0;
 volatile long left_encoder_count = 0;
 
-const int MAX_PWM = 180;
+const int MAX_PWM = 255;
 const float WHEEL_RADIUS = 4.2;        
 const float WHEEL_BASE = 31.5;         
-const float ENCODER_TICKS_PER_REV = 69.0;  // Calibrated based on actual movement
-const float MAX_LINEAR_VEL = 50.0;     
+const float ENCODER_TICKS_PER_REV = 207.0;  // Back to calibrated value
 
 float left_distance = 0.0;
 float right_distance = 0.0;
@@ -38,25 +37,18 @@ float mpu_angle = 0.0;
 long last_left_count = 0;
 long last_right_count = 0;
 unsigned long last_time = 0;
-unsigned long sample_time = 20; // 50 Hz
+unsigned long sample_time = 100; // 10 Hz like original
 
-float cmd_v = 0.0;
-float cmd_w = 0.0;
+// Commands from Python
+float target_x = 100.0;
+float target_y = 0.0;
 unsigned long last_cmd_time = 0;
 
-float left_velocity = 0.0;
-float right_velocity = 0.0;
-float target_left_velocity = 0.0;
-float target_right_velocity = 0.0;
-
-// PID
-float left_error_sum = 0.0;
-float left_last_error = 0.0;
-float Kp_left = 5.0, Ki_left = 0.0, Kd_left = 0.0;  // Reduced to prevent grinding
-float right_error_sum = 0.0;
-float right_last_error = 0.0;
-float Kp_right = 5.0, Ki_right = 0.0, Kd_right = 0.0;  // Reduced to prevent grinding
-float Kf = 1.5; // feedforward - reduced
+// Go-to-goal parameters (from working firmware)
+const float DISTANCE_THRESHOLD = 5.0;
+float Kp_heading = 55.0;
+float Kp_velocity = 2.0;
+const int BASE_PWM = 170;
 
 // Encoder ISRs
 void IRAM_ATTR right_encoder_ISR() {
@@ -155,6 +147,7 @@ void Odometry() {
 }
 
 // Read UART from Pi
+// Read goal from Python: "tx:<x>,ty:<y>\n"
 void readPiCommand() {
     static char buf[32];
     static uint8_t idx = 0;
@@ -162,11 +155,11 @@ void readPiCommand() {
         char c = Serial2.read();
         if (c == '\n') {
             buf[idx] = '\0';
-            char *v_ptr = strstr(buf, "v:");
-            char *w_ptr = strstr(buf, ",w:");
-            if (v_ptr && w_ptr) {
-                cmd_v = atof(v_ptr+2);
-                cmd_w = atof(w_ptr+3);
+            char *tx_ptr = strstr(buf, "tx:");
+            char *ty_ptr = strstr(buf, ",ty:");
+            if (tx_ptr && ty_ptr) {
+                target_x = atof(tx_ptr+3);
+                target_y = atof(ty_ptr+4);
                 last_cmd_time = millis();
             }
             idx = 0;
@@ -174,48 +167,41 @@ void readPiCommand() {
     }
 }
 
-// Send state to Pi
+// Send state to Pi: x,y,theta,mpu_angle
 void sendState() {
     Serial2.print(x,3); Serial2.print(',');
     Serial2.print(y,3); Serial2.print(',');
     Serial2.print(theta,4); Serial2.print(',');
-    Serial2.print(mpu_angle,4); Serial2.print(',');
-    Serial2.print(left_velocity,3); Serial2.print(',');
-    Serial2.print(right_velocity,3);
+    Serial2.print(mpu_angle,4);
     Serial2.println();
-    
-    // USB debug for calibration
-    Serial.print("Enc L:"); Serial.print(left_encoder_count);
-    Serial.print(" R:"); Serial.print(right_encoder_count);
-    Serial.print(" | Pos:("); Serial.print(x,1); Serial.print(","); Serial.print(y,1);
-    Serial.println(")");
 }
 
 // PID velocity control
-void wheelVelocityControl() {
-    float dt = sample_time / 1000.0;
+// Direct PWM go-to-goal (from working firmware)
+void goToGoal() {
+    float distance_to_goal = sqrt(pow(target_x - x, 2) + pow(target_y - y, 2));
+    
+    if (distance_to_goal > DISTANCE_THRESHOLD) {
+        float base_speed = Kp_velocity * distance_to_goal;
+        base_speed = constrain(base_speed, 0, BASE_PWM);
+        
+        float desired_heading = atan2(target_y - y, target_x - x);
+        float heading_error = desired_heading - mpu_angle;
+        while (heading_error > PI) heading_error -= 2 * PI;
+        while (heading_error < -PI) heading_error += 2 * PI;
+        
+        float correction = Kp_heading * heading_error;
 
-    left_error_sum += (target_left_velocity - left_velocity)*dt;
-    right_error_sum += (target_right_velocity - right_velocity)*dt;
-
-    left_error_sum = constrain(left_error_sum, -100, 100);
-    right_error_sum = constrain(right_error_sum, -100, 100);
-
-    float left_pwm = Kf*target_left_velocity
-                   + Kp_left*(target_left_velocity-left_velocity)
-                   + Ki_left*left_error_sum
-                   + Kd_left*((target_left_velocity-left_velocity)-left_last_error)/dt;
-    left_last_error = target_left_velocity-left_velocity;
-
-    float right_pwm = Kf*target_right_velocity
-                    + Kp_right*(target_right_velocity-right_velocity)
-                    + Ki_right*right_error_sum
-                    + Kd_right*((target_right_velocity-right_velocity)-right_last_error)/dt;
-    right_last_error = target_right_velocity-right_velocity;
-
-    int l = applyDeadzone((int)constrain(left_pwm, -MAX_PWM, MAX_PWM));
-    int r = applyDeadzone((int)constrain(right_pwm, -MAX_PWM, MAX_PWM));
-    setMotor(l,r);
+        int leftPWM = base_speed - correction;
+        int rightPWM = base_speed + correction;
+        
+        leftPWM = constrain(leftPWM, -MAX_PWM, MAX_PWM);
+        rightPWM = constrain(rightPWM, -MAX_PWM, MAX_PWM);
+        
+        setMotor(leftPWM, rightPWM);
+    } else {
+        setMotor(0, 0);
+    }
 }
 
 // Arduino setup
@@ -235,24 +221,20 @@ void loop() {
     while (mpu_angle > PI) mpu_angle -= 2*PI;
     while (mpu_angle < -PI) mpu_angle += 2*PI;
 
-    readPiCommand();
+    readPiCommand();  // Read new goals from Python
+    
     unsigned long current_time = millis();
     if (current_time - last_time >= sample_time) {
         Odometry();
-
-        if (current_time - last_cmd_time > CMD_TIMEOUT_MS) {
-            cmd_v = 0.0;
-            cmd_w = 0.0;
-        }
-
-        target_left_velocity  = cmd_v - cmd_w*(WHEEL_BASE/2.0);
-        target_right_velocity = cmd_v + cmd_w*(WHEEL_BASE/2.0);
-
-        target_left_velocity  = constrain(target_left_velocity,  -MAX_LINEAR_VEL, MAX_LINEAR_VEL);
-        target_right_velocity = constrain(target_right_velocity, -MAX_LINEAR_VEL, MAX_LINEAR_VEL);
-
-        wheelVelocityControl();
-        sendState();
+        goToGoal();  // Direct PWM control
+        sendState();  // Send state to Python
+        
+        // Debug to USB Serial
+        Serial.print(x, 2); Serial.print(" ");
+        Serial.print(y, 2); Serial.print(" ");
+        Serial.print(theta, 4); Serial.print(" ");
+        Serial.print(mpu_angle, 4); Serial.println();
+        
         last_time = current_time;
     }
 }
