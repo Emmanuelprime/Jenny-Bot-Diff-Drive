@@ -2,6 +2,9 @@ import serial
 import math
 import time
 import sys
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+from collections import deque
 
 SERIAL_PORT = '/dev/serial0'
 BAUD_RATE   = 115200
@@ -57,9 +60,65 @@ def parse_state(line):
         return tuple(float(p) for p in parts)
     except: return None
 
+class RobotVisualizer:
+    def __init__(self, waypoints):
+        plt.ion()
+        self.fig, self.ax = plt.subplots(figsize=(10, 10))
+        self.ax.set_aspect('equal')
+        self.ax.grid(True, alpha=0.3)
+        self.ax.set_xlabel('X (cm)')
+        self.ax.set_ylabel('Y (cm)')
+        self.ax.set_title('Robot Navigation')
+        
+        self.trajectory = deque(maxlen=500)
+        self.trajectory_line, = self.ax.plot([], [], 'b-', alpha=0.5, linewidth=1)
+        
+        for i, wp in enumerate(waypoints):
+            x, y, theta = wp
+            self.ax.plot(x, y, 'go', markersize=10)
+            self.ax.text(x+5, y+5, f'WP{i+1}', fontsize=9)
+            if theta is not None:
+                dx = 15 * math.cos(theta)
+                dy = 15 * math.sin(theta)
+                self.ax.arrow(x, y, dx, dy, head_width=5, head_length=3, fc='green', ec='green', alpha=0.5)
+        
+        self.robot_arrow = None
+        self.robot_pos, = self.ax.plot([], [], 'ro', markersize=8)
+        
+        plt.show(block=False)
+        plt.pause(0.1)
+    
+    def update(self, x, y, theta):
+        self.trajectory.append((x, y))
+        
+        if len(self.trajectory) > 1:
+            xs, ys = zip(*self.trajectory)
+            self.trajectory_line.set_data(xs, ys)
+        
+        self.robot_pos.set_data([x], [y])
+        
+        if self.robot_arrow:
+            self.robot_arrow.remove()
+        
+        dx = 20 * math.cos(theta)
+        dy = 20 * math.sin(theta)
+        self.robot_arrow = self.ax.arrow(x, y, dx, dy, head_width=8, head_length=6, 
+                                          fc='red', ec='red', linewidth=2)
+        
+        self.ax.relim()
+        self.ax.autoscale_view()
+        
+        plt.draw()
+        plt.pause(0.001)
+    
+    def close(self):
+        plt.close(self.fig)
+
 def main(waypoints):
     ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0.05)
     global target_x, target_y
+    
+    visualizer = RobotVisualizer(waypoints)
     
     waypoint_index = 0
     target_x, target_y, desired_theta = waypoints[waypoint_index]
@@ -80,6 +139,8 @@ def main(waypoints):
                 continue
 
             x, y, fused_theta, mpu_angle, lv, rv = state
+            
+            visualizer.update(x, y, fused_theta)
             
             dx = target_x - x
             dy = target_y - y
@@ -121,11 +182,16 @@ def main(waypoints):
 
             elapsed = time.time() - loop_start
             time.sleep(max(0.0, LOOP_DT - elapsed))
+        
+        print("\nAll waypoints reached! Close the plot window or press Ctrl+C to exit.")
+        plt.show(block=True)
+        
     except KeyboardInterrupt:
         ser.write(b'v:0.0,w:0.0\n')
         time.sleep(0.2)
     finally:
         ser.close()
+        visualizer.close()
 
 if __name__=="__main__":
     if len(sys.argv) < 3:
