@@ -169,24 +169,29 @@ if __name__=="__main__":
     
     i = 0
     while i < len(args):
-        if i + 1 < len(args):
-            x = args[i]
-            y = args[i + 1]
-            
-            # Check if there's a theta value (next arg exists and would not be a new x coordinate)
-            # We assume if there are 2 more args after this, the 3rd one is theta
-            if i + 2 < len(args) and (i + 3 >= len(args) or i + 4 < len(args)):
-                # Has orientation
-                theta_deg = args[i + 2]
-                theta_rad = math.radians(theta_deg)
-                waypoints.append((x, y, theta_rad))
-                i += 3
-            else:
-                # No orientation
-                waypoints.append((x, y, None))
-                i += 2
-        else:
+        if i + 1 >= len(args):
             print("Error: Each waypoint needs at least x and y coordinates")
             sys.exit(1)
+        
+        x = args[i]
+        y = args[i + 1]
+        
+        # Check if there's a third value that could be theta
+        # It's theta if: we have a 3rd value AND (we're at the end OR there are 2+ more values after)
+        has_theta = False
+        if i + 2 < len(args):
+            remaining_after_theta = len(args) - (i + 3)
+            # If remaining values is 0 or even (divisible by 2), this is a theta
+            if remaining_after_theta == 0 or remaining_after_theta >= 2:
+                has_theta = True
+        
+        if has_theta:
+            theta_deg = args[i + 2]
+            theta_rad = math.radians(theta_deg)
+            waypoints.append((x, y, theta_rad))
+            i += 3
+        else:
+            waypoints.append((x, y, None))
+            i += 2
     
     main(waypoints)
