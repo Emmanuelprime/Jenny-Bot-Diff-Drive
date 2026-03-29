@@ -38,13 +38,13 @@ unsigned long sample_time = 100; // ms
 
 // Go-to-goal parameters
 bool goal_reached = false;
-float target_x = 0.0; // cm
-float target_y = 100.0; // cm
+float target_x = 100.0; // cm
+float target_y = 0.0; // cm
 const float DISTANCE_THRESHOLD = 5.0; // cm
 const float MAX_LINEAR_VEL = 50.0; // cm/s
 const float MAX_ANGULAR_VEL = 2.0; // rad/s
-float Kp_linear = 2.5; //0.5
-float Kp_angular = 1.5; //1.5
+float Kp_linear = 2.51; //0.5
+float Kp_angular = 8.5; //1.5
 
 // Wheel velocities
 float left_velocity = 0.0; // measured cm/s
@@ -56,14 +56,14 @@ float target_right_velocity = 0.0; // desired cm/s
 float left_error_sum = 0.0;
 float left_last_error = 0.0;
 float Kp_left = 5.0;
-float Ki_left = 0.05;
+float Ki_left = 0.055;
 float Kd_left = 0.1;
 
 // PID controller state for right wheel
 float right_error_sum = 0.0;
 float right_last_error = 0.0;
 float Kp_right = 5.0;
-float Ki_right = 0.05;
+float Ki_right = 0.055;
 float Kd_right = 0.1;
 
 void IRAM_ATTR right_encoder_ISR() {
@@ -155,6 +155,7 @@ void loop() {
         Serial.print(" ");
         Serial.print(mpu_angle, 4);
         Serial.println();
+        
         last_time = current_time;
     }
 }
