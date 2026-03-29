@@ -38,7 +38,7 @@ float mpu_angle = 0.0;
 long last_left_count = 0;
 long last_right_count = 0;
 unsigned long last_time = 0;
-unsigned long sample_time = 20; // ms
+unsigned long sample_time = 100; // ms
 
 float commanded_v = 0.0;   
 float commanded_omega = 0.0;
@@ -236,7 +236,6 @@ void wheelVelocityControl(){
 
     float left_error        = target_left_velocity - left_velocity;
     left_error_sum         += left_error * dt;
-    left_error_sum = constrain(left_error_sum, -100, 100);
     float left_error_deriv  = (left_error - left_last_error) / dt;
     float left_pwm          = Kp_left * left_error
                             + Ki_left * left_error_sum
@@ -245,7 +244,6 @@ void wheelVelocityControl(){
 
     float right_error        = target_right_velocity - right_velocity;
     right_error_sum         += right_error * dt;
-    right_error_sum = constrain(right_error_sum, -100, 100);
     float right_error_deriv  = (right_error - right_last_error) / dt;
     float right_pwm          = Kp_right * right_error
                              + Ki_right * right_error_sum
