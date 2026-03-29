@@ -70,11 +70,10 @@ def main(waypoints):
     
     print(f"Navigating through {len(waypoints)} waypoint(s)")
     for i, wp in enumerate(waypoints):
-        if len(wp) == 3:
-            wx, wy, wtheta = wp
+        wx, wy, wtheta = wp
+        if wtheta is not None:
             print(f"  Waypoint {i+1}: ({wx:.1f}, {wy:.1f}, {math.degrees(wtheta):.1f}°)")
         else:
-            wx, wy = wp
             print(f"  Waypoint {i+1}: ({wx:.1f}, {wy:.1f})")
     print()
 
