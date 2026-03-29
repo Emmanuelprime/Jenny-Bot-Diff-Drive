@@ -3,7 +3,6 @@ import math
 import time
 import sys
 
-
 SERIAL_PORT = '/dev/serial0'
 BAUD_RATE   = 115200
 
@@ -11,8 +10,8 @@ WHEEL_BASE   = 31.5
 MAX_LINEAR_VEL  = 50.0
 MAX_ANGULAR_VEL =  2.0
 
-Kp_linear  = 0.6
-Kp_angular = 2.0
+Kp_linear  = 2.51
+Kp_angular = 8.5
 DISTANCE_THRESHOLD = 5.0
 
 LOOP_HZ  = 10
@@ -28,22 +27,11 @@ def go_to_goal(x, y, mpu_theta, lv, rv):
     dy = target_y - y
     distance = math.sqrt(dx*dx + dy*dy)
 
-    if distance < DISTANCE_THRESHOLD and abs(lv) < 2 and abs(rv) < 2:
+    if distance < DISTANCE_THRESHOLD:
         return 0.0, 0.0, True
 
     v = Kp_linear*distance
-    # v = max(0.0, min(v, MAX_LINEAR_VEL))
-
-    v = Kp_linear * distance
-
-    if distance < 50.0:
-        v *= (distance / 50.0)
-
-    # Minimum velocity ONLY when not too close
-    MIN_V = 8.0
-
-    if distance > 15.0:
-        v = max(v, MIN_V)
+    v = max(0.0, min(v, MAX_LINEAR_VEL))
 
     desired_heading = math.atan2(dy, dx)
     heading_error = normalize_angle(desired_heading - mpu_theta)
