@@ -3,7 +3,6 @@ import math
 import time
 import sys
 
-from shapely import distance
 
 SERIAL_PORT = '/dev/serial0'
 BAUD_RATE   = 115200
