@@ -46,15 +46,22 @@ def parse_state(line):
         return tuple(float(p) for p in parts)
     except: return None
 
-def main(target_x_arg, target_y_arg):
+def main(waypoints):
     ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0.05)
     global target_x, target_y
-    target_x = target_x_arg
-    target_y = target_y_arg
+    
+    waypoint_index = 0
+    target_x, target_y = waypoints[waypoint_index]
     goal_reached = False
+    all_waypoints_reached = False
+    
+    print(f"Navigating through {len(waypoints)} waypoint(s)")
+    for i, (wx, wy) in enumerate(waypoints):
+        print(f"  Waypoint {i+1}: ({wx:.1f}, {wy:.1f})")
+    print()
 
     try:
-        while True:
+        while not all_waypoints_reached:
             loop_start = time.time()
             raw = ser.readline().decode('utf-8', errors='ignore')
             state = parse_state(raw) if raw else None
@@ -77,8 +84,18 @@ def main(target_x_arg, target_y_arg):
                 v, omega, goal_reached = go_to_goal(x, y, fused_theta, lv, rv)
             else:
                 v, omega = 0.0, 0.0
+                
+                # Check if there are more waypoints
+                if waypoint_index < len(waypoints) - 1:
+                    waypoint_index += 1
+                    target_x, target_y = waypoints[waypoint_index]
+                    goal_reached = False
+                    print(f"\n→ Moving to waypoint {waypoint_index+1}: ({target_x:.1f}, {target_y:.1f})\n")
+                else:
+                    print(f"\n✓ All waypoints reached!\n")
+                    all_waypoints_reached = True
 
-            print(f"Pos:({x:.1f},{y:.1f}) Goal:({target_x:.1f},{target_y:.1f}) "
+            print(f"WP{waypoint_index+1}/{len(waypoints)} Pos:({x:.1f},{y:.1f}) Goal:({target_x:.1f},{target_y:.1f}) "
                   f"Dist:{dist:.1f} Fused:{math.degrees(fused_theta):.1f}° "
                   f"Err:{math.degrees(heading_error):.1f}° v:{v:.1f} ω:{omega:.2f}")
 
@@ -96,9 +113,18 @@ def main(target_x_arg, target_y_arg):
         ser.close()
 
 if __name__=="__main__":
-    if len(sys.argv)!=3:
-        print("Usage: python controller.py <target_x> <target_y>")
+    if len(sys.argv) < 3 or len(sys.argv) % 2 == 0:
+        print("Usage: python controller.py <x1> <y1> [<x2> <y2> ...]")
+        print("Examples:")
+        print("  python controller.py 100 0              # Single waypoint")
+        print("  python controller.py 50 50 100 0 50 -50 # Three waypoints")
         sys.exit(1)
-    target_x = float(sys.argv[1])
-    target_y = float(sys.argv[2])
-    main(target_x, target_y)
+    
+    # Parse waypoints from command line arguments
+    waypoints = []
+    for i in range(1, len(sys.argv), 2):
+        x = float(sys.argv[i])
+        y = float(sys.argv[i+1])
+        waypoints.append((x, y))
+    
+    main(waypoints)
