@@ -13,6 +13,7 @@ MAX_ANGULAR_VEL =  2.0
 Kp_linear  = 2.51
 Kp_angular = 8.5
 DISTANCE_THRESHOLD = 5.0
+HEADING_THRESHOLD = 0.087  # ~5 degrees in radians
 
 LOOP_HZ  = 10
 LOOP_DT  = 1.0 / LOOP_HZ
@@ -39,6 +40,17 @@ def go_to_goal(x, y, fused_theta, lv, rv):
     omega = max(-MAX_ANGULAR_VEL, min(omega, MAX_ANGULAR_VEL))
     return v, omega, False
 
+def align_orientation(fused_theta, desired_theta):
+    """Pure rotation to align with desired orientation"""
+    heading_error = normalize_angle(desired_theta - fused_theta)
+    
+    if abs(heading_error) < HEADING_THRESHOLD:
+        return 0.0, True
+    
+    omega = Kp_angular * heading_error
+    omega = max(-MAX_ANGULAR_VEL, min(omega, MAX_ANGULAR_VEL))
+    return omega, False
+
 def parse_state(line):
     try:
         parts = line.strip().split(',')
@@ -51,13 +63,19 @@ def main(waypoints):
     global target_x, target_y
     
     waypoint_index = 0
-    target_x, target_y = waypoints[waypoint_index]
-    goal_reached = False
+    target_x, target_y, desired_theta = waypoints[waypoint_index]
+    position_reached = False
+    orientation_reached = False
     all_waypoints_reached = False
     
     print(f"Navigating through {len(waypoints)} waypoint(s)")
-    for i, (wx, wy) in enumerate(waypoints):
-        print(f"  Waypoint {i+1}: ({wx:.1f}, {wy:.1f})")
+    for i, wp in enumerate(waypoints):
+        if len(wp) == 3:
+            wx, wy, wtheta = wp
+            print(f"  Waypoint {i+1}: ({wx:.1f}, {wy:.1f}, {math.degrees(wtheta):.1f}°)")
+        else:
+            wx, wy = wp
+            print(f"  Waypoint {i+1}: ({wx:.1f}, {wy:.1f})")
     print()
 
     try:
@@ -77,25 +95,49 @@ def main(waypoints):
             dx = target_x - x
             dy = target_y - y
             dist = math.sqrt(dx*dx + dy*dy)
-            desired_heading = math.atan2(dy, dx)
-            heading_error = normalize_angle(desired_heading - fused_theta)
             
-            if not goal_reached:
-                v, omega, goal_reached = go_to_goal(x, y, fused_theta, lv, rv)
+            # Two-phase control: position first, then orientation
+            if not position_reached:
+                desired_heading = math.atan2(dy, dx)
+                heading_error = normalize_angle(desired_heading - fused_theta)
+                v, omega, position_reached = go_to_goal(x, y, fused_theta, lv, rv)
+                
+                if position_reached:
+                    print(f"  → Position reached!")
+                    # Check if waypoint has desired orientation
+                    if desired_theta is not None:
+                        print(f"  → Aligning to {math.degrees(desired_theta):.1f}°...")
+                    else:
+                        orientation_reached = True
+            
+            elif not orientation_reached and desired_theta is not None:
+                # Pure rotation to desired orientation
+                heading_error = normalize_angle(desired_theta - fused_theta)
+                omega, orientation_reached = align_orientation(fused_theta, desired_theta)
+                v = 0.0
+                
+                if orientation_reached:
+                    print(f"  → Orientation aligned!")
             else:
                 v, omega = 0.0, 0.0
+                heading_error = 0.0
                 
                 # Check if there are more waypoints
                 if waypoint_index < len(waypoints) - 1:
                     waypoint_index += 1
-                    target_x, target_y = waypoints[waypoint_index]
-                    goal_reached = False
-                    print(f"\n→ Moving to waypoint {waypoint_index+1}: ({target_x:.1f}, {target_y:.1f})\n")
+                    wp = waypoints[waypoint_index]
+                    target_x, target_y = wp[0], wp[1]
+                    desired_theta = wp[2] if len(wp) == 3 else None
+                    position_reached = False
+                    orientation_reached = False
+                    print(f"\n→ Moving to waypoint {waypoint_index+1}\n")
                 else:
                     print(f"\n✓ All waypoints reached!\n")
                     all_waypoints_reached = True
 
-            print(f"WP{waypoint_index+1}/{len(waypoints)} Pos:({x:.1f},{y:.1f}) Goal:({target_x:.1f},{target_y:.1f}) "
+            # Status display
+            status = "ALIGN" if position_reached and not orientation_reached else "MOVE"
+            print(f"WP{waypoint_index+1}/{len(waypoints)} [{status}] Pos:({x:.1f},{y:.1f}) Goal:({target_x:.1f},{target_y:.1f}) "
                   f"Dist:{dist:.1f} Fused:{math.degrees(fused_theta):.1f}° "
                   f"Err:{math.degrees(heading_error):.1f}° v:{v:.1f} ω:{omega:.2f}")
 
@@ -113,18 +155,38 @@ def main(waypoints):
         ser.close()
 
 if __name__=="__main__":
-    if len(sys.argv) < 3 or len(sys.argv) % 2 == 0:
-        print("Usage: python controller.py <x1> <y1> [<x2> <y2> ...]")
+    if len(sys.argv) < 3:
+        print("Usage: python controller.py <x1> <y1> [theta1] [<x2> <y2> [theta2] ...]")
         print("Examples:")
-        print("  python controller.py 100 0              # Single waypoint")
-        print("  python controller.py 50 50 100 0 50 -50 # Three waypoints")
+        print("  python controller.py 100 0                    # Single waypoint (x, y)")
+        print("  python controller.py 100 0 45                 # With orientation (45°)")
+        print("  python controller.py 50 50 100 0 45 50 -50 0  # Three waypoints with final orientations")
         sys.exit(1)
     
     # Parse waypoints from command line arguments
     waypoints = []
-    for i in range(1, len(sys.argv), 2):
-        x = float(sys.argv[i])
-        y = float(sys.argv[i+1])
-        waypoints.append((x, y))
+    args = [float(arg) for arg in sys.argv[1:]]
+    
+    i = 0
+    while i < len(args):
+        if i + 1 < len(args):
+            x = args[i]
+            y = args[i + 1]
+            
+            # Check if there's a theta value (next arg exists and would not be a new x coordinate)
+            # We assume if there are 2 more args after this, the 3rd one is theta
+            if i + 2 < len(args) and (i + 3 >= len(args) or i + 4 < len(args)):
+                # Has orientation
+                theta_deg = args[i + 2]
+                theta_rad = math.radians(theta_deg)
+                waypoints.append((x, y, theta_rad))
+                i += 3
+            else:
+                # No orientation
+                waypoints.append((x, y, None))
+                i += 2
+        else:
+            print("Error: Each waypoint needs at least x and y coordinates")
+            sys.exit(1)
     
     main(waypoints)
