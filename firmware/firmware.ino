@@ -38,27 +38,23 @@ float mpu_angle = 0.0;
 long last_left_count = 0;
 long last_right_count = 0;
 unsigned long last_time = 0;
-unsigned long sample_time = 100; // ms
+unsigned long sample_time = 20; // ms
 
-// Commands from Raspberry Pi
-float commanded_v = 0.0;     // linear velocity from Pi (cm/s)
-float commanded_omega = 0.0; // angular velocity from Pi (rad/s)
+float commanded_v = 0.0;   
+float commanded_omega = 0.0;
 bool command_received = false;
 
-// Wheel velocities
 float left_velocity = 0.0; // measured cm/s
 float right_velocity = 0.0; // measured cm/s
 float target_left_velocity = 0.0; // desired cm/s
 float target_right_velocity = 0.0; // desired cm/s
 
-// PID controller state for left wheel
 float left_error_sum = 0.0;
 float left_last_error = 0.0;
 float Kp_left = 5.0;
 float Ki_left = 0.055;
 float Kd_left = 0.1;
 
-// PID controller state for right wheel
 float right_error_sum = 0.0;
 float right_last_error = 0.0;
 float Kp_right = 5.0;
@@ -186,7 +182,6 @@ void Odometry(){
     while (theta < -PI) theta += 2 * PI;
 }
 
-// Read velocity commands from Raspberry Pi
 void readPiCommand() {
     static char buf[64];
     static int idx = 0;
@@ -195,7 +190,6 @@ void readPiCommand() {
         char c = Serial2.read();
         if (c == '\n') {
             buf[idx] = '\0';
-            // Parse "v:<value>,w:<value>"
             char *v_ptr = strstr(buf, "v:");
             char *w_ptr = strstr(buf, ",w:");
             if (v_ptr && w_ptr) {
@@ -210,7 +204,7 @@ void readPiCommand() {
     }
 }
 
-// Send state to Raspberry Pi: x,y,theta,mpu_angle,left_velocity,right_velocity
+
 void sendState() {
     Serial2.print(x, 3);
     Serial2.print(',');
@@ -226,7 +220,6 @@ void sendState() {
     Serial2.println();
 }
 
-// Convert v and omega commands to wheel velocities
 void convertVelocityCommands() {
     if (!command_received) {
         target_left_velocity = 0.0;
@@ -234,7 +227,6 @@ void convertVelocityCommands() {
         return;
     }
     
-    // Differential drive kinematics: v_left = v - omega*(L/2), v_right = v + omega*(L/2)
     target_left_velocity = commanded_v - commanded_omega * (WHEEL_BASE / 2.0);
     target_right_velocity = commanded_v + commanded_omega * (WHEEL_BASE / 2.0);
 }
@@ -244,6 +236,7 @@ void wheelVelocityControl(){
 
     float left_error        = target_left_velocity - left_velocity;
     left_error_sum         += left_error * dt;
+    left_error_sum = constrain(left_error_sum, -100, 100);
     float left_error_deriv  = (left_error - left_last_error) / dt;
     float left_pwm          = Kp_left * left_error
                             + Ki_left * left_error_sum
@@ -252,6 +245,7 @@ void wheelVelocityControl(){
 
     float right_error        = target_right_velocity - right_velocity;
     right_error_sum         += right_error * dt;
+    right_error_sum = constrain(right_error_sum, -100, 100);
     float right_error_deriv  = (right_error - right_last_error) / dt;
     float right_pwm          = Kp_right * right_error
                              + Ki_right * right_error_sum

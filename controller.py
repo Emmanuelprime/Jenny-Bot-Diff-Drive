@@ -3,6 +3,8 @@ import math
 import time
 import sys
 
+from shapely import distance
+
 SERIAL_PORT = '/dev/serial0'
 BAUD_RATE   = 115200
 
@@ -10,9 +12,9 @@ WHEEL_BASE   = 31.5
 MAX_LINEAR_VEL  = 50.0
 MAX_ANGULAR_VEL =  2.0
 
-Kp_linear  = 2.51  # Increased for faster movement
-Kp_angular = 8.5
-DISTANCE_THRESHOLD = 10.0
+Kp_linear  = 0.6
+Kp_angular = 2.0
+DISTANCE_THRESHOLD = 5.0
 
 LOOP_HZ  = 10
 LOOP_DT  = 1.0 / LOOP_HZ
@@ -27,13 +29,22 @@ def go_to_goal(x, y, mpu_theta, lv, rv):
     dy = target_y - y
     distance = math.sqrt(dx*dx + dy*dy)
 
-    if distance < DISTANCE_THRESHOLD:
+    if distance < DISTANCE_THRESHOLD and abs(lv) < 2 and abs(rv) < 2:
         return 0.0, 0.0, True
 
-    # smooth slowdown
     v = Kp_linear*distance
-    # if distance < 50.0: v *= distance/50.0
-    v = max(0.0, min(v, MAX_LINEAR_VEL))
+    # v = max(0.0, min(v, MAX_LINEAR_VEL))
+
+    v = Kp_linear * distance
+
+    if distance < 50.0:
+        v *= (distance / 50.0)
+
+    # Minimum velocity ONLY when not too close
+    MIN_V = 8.0
+
+    if distance > 15.0:
+        v = max(v, MIN_V)
 
     desired_heading = math.atan2(dy, dx)
     heading_error = normalize_angle(desired_heading - mpu_theta)
@@ -69,7 +80,6 @@ def main(target_x_arg, target_y_arg):
 
             x, y, theta, mpu_angle, lv, rv = state
             
-            # Calculate distance and heading for debugging
             dx = target_x - x
             dy = target_y - y
             dist = math.sqrt(dx*dx + dy*dy)
@@ -81,7 +91,6 @@ def main(target_x_arg, target_y_arg):
             else:
                 v, omega = 0.0, 0.0
 
-            # Print debug info
             print(f"Pos:({x:.1f},{y:.1f}) Goal:({target_x:.1f},{target_y:.1f}) "
                   f"Dist:{dist:.1f} Head:{math.degrees(mpu_angle):.1f}° "
                   f"Err:{math.degrees(heading_error):.1f}° v:{v:.1f} ω:{omega:.2f}")
@@ -94,7 +103,7 @@ def main(target_x_arg, target_y_arg):
     except KeyboardInterrupt:
         print("\nStopping robot...")
         ser.write(b'v:0.0,w:0.0\n')
-        time.sleep(0.2)  # Give time for command to reach ESP32
+        time.sleep(0.2)
         print("Robot stopped.")
     finally:
         ser.close()
