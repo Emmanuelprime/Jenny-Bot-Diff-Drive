@@ -14,11 +14,15 @@ MPU6050 mpu6050(Wire);
 #define ENCODER_LEFT_A 32 
 #define ENCODER_LEFT_B 33 
 
+#define PI_RX_PIN 23
+#define PI_TX_PIN 19
+#define PI_BAUD 115200
+
 volatile long right_encoder_count = 0;
 volatile long left_encoder_count = 0;
 
 const int MAX_PWM = 255;
-const int BASE_PWM = 170;
+const int BASE_PWM = 150;
 
 
 const float WHEEL_RADIUS = 4.2; // cm
@@ -36,17 +40,26 @@ long last_right_count = 0;
 unsigned long last_time = 0;
 unsigned long sample_time = 100; // ms
 
+float commanded_v = 0.0;   
+float commanded_omega = 0.0;
+bool command_received = false;
 
-float desired_heading = 0.0; // radians
-float target_x = 100.0; // cm
-float target_y = 100.0; // cm
-const float DISTANCE_THRESHOLD = 5.0; // cm
-float Kp_heading = 55.0;
+float left_velocity = 0.0; // measured cm/s
+float right_velocity = 0.0; // measured cm/s
+float target_left_velocity = 0.0; // desired cm/s
+float target_right_velocity = 0.0; // desired cm/s
 
-float robot_velocity = 0.0; // cm/s
-float Kp_velocity = 2.0;
+float left_error_sum = 0.0;
+float left_last_error = 0.0;
+float Kp_left = 5.0;
+float Ki_left = 0.055;
+float Kd_left = 0.1;
 
-
+float right_error_sum = 0.0;
+float right_last_error = 0.0;
+float Kp_right = 5.0;
+float Ki_right = 0.055;
+float Kd_right = 0.1;
 
 void IRAM_ATTR right_encoder_ISR() {
     if (digitalRead(ENCODER_RIGHT_B)) right_encoder_count--;
@@ -111,6 +124,7 @@ void setMotor(int leftPWM, int rightPWM) {
 
 void setup() {
     Serial.begin(115200);
+    Serial2.begin(PI_BAUD, SERIAL_8N1, PI_RX_PIN, PI_TX_PIN);
     initIMU();
     initMotorPins();
     initEncoders();
@@ -118,6 +132,8 @@ void setup() {
 }
 
 void loop() {
+    readPiCommand();
+    
     mpu6050.update();
     mpu_angle = mpu6050.getAngleZ() * PI / 180.0;
     while (mpu_angle > PI) mpu_angle -= 2 * PI;
@@ -126,16 +142,10 @@ void loop() {
     unsigned long current_time = millis();
     if (current_time - last_time >= sample_time) {
         Odometry();
-        goToGoal();
+        convertVelocityCommands();
+        wheelVelocityControl();
+        sendState();
         
-        Serial.print(x, 2);
-        Serial.print(" ");
-        Serial.print(y, 2);
-        Serial.print(" ");
-        Serial.print(theta, 4);
-        Serial.print(" ");
-        Serial.print(mpu_angle, 4);
-        Serial.println();
         last_time = current_time;
     }
 }
@@ -150,8 +160,13 @@ void Odometry(){
     last_left_count = current_left_count;
     last_right_count = current_right_count;
 
+    float dt = sample_time / 1000.0;  // seconds
+
     left_distance = (delta_left / ENCODER_TICKS_PER_REV) * (2 * PI * WHEEL_RADIUS);
     right_distance = (delta_right / ENCODER_TICKS_PER_REV) * (2 * PI * WHEEL_RADIUS);
+
+    left_velocity = left_distance / dt;
+    right_velocity = right_distance / dt;
 
     float delta_theta = (right_distance - left_distance) / WHEEL_BASE;
 
@@ -165,28 +180,76 @@ void Odometry(){
 
     while (theta > PI) theta -= 2 * PI;
     while (theta < -PI) theta += 2 * PI;
-
 }
 
-void goToGoal(){
-    float distance_to_goal = sqrt(pow(target_x - x, 2) + pow(target_y - y, 2));
+void readPiCommand() {
+    static char buf[64];
+    static int idx = 0;
     
-    if (distance_to_goal > DISTANCE_THRESHOLD) {
-        float base_speed = Kp_velocity * distance_to_goal;
-        base_speed = constrain(base_speed, 0, BASE_PWM);
-        
-        desired_heading = atan2(target_y - y, target_x - x);
-        float heading_error = desired_heading - mpu_angle;
-        while (heading_error > PI) heading_error -= 2 * PI;
-        while (heading_error < -PI) heading_error += 2 * PI;
-        
-        float correction = Kp_heading * heading_error;
-
-        int leftPWM = base_speed - correction;
-        int rightPWM = base_speed + correction;
-        
-        setMotor(leftPWM, rightPWM);
-    } else {
-        setMotor(0, 0);
+    while (Serial2.available()) {
+        char c = Serial2.read();
+        if (c == '\n') {
+            buf[idx] = '\0';
+            char *v_ptr = strstr(buf, "v:");
+            char *w_ptr = strstr(buf, ",w:");
+            if (v_ptr && w_ptr) {
+                commanded_v = atof(v_ptr + 2);
+                commanded_omega = atof(w_ptr + 3);
+                command_received = true;
+            }
+            idx = 0;
+        } else if (idx < sizeof(buf) - 1) {
+            buf[idx++] = c;
+        }
     }
+}
+
+
+void sendState() {
+    Serial2.print(x, 3);
+    Serial2.print(',');
+    Serial2.print(y, 3);
+    Serial2.print(',');
+    Serial2.print(theta, 4);
+    Serial2.print(',');
+    Serial2.print(mpu_angle, 4);
+    Serial2.print(',');
+    Serial2.print(left_velocity, 2);
+    Serial2.print(',');
+    Serial2.print(right_velocity, 2);
+    Serial2.println();
+}
+
+void convertVelocityCommands() {
+    if (!command_received) {
+        target_left_velocity = 0.0;
+        target_right_velocity = 0.0;
+        return;
+    }
+    
+    target_left_velocity = commanded_v - commanded_omega * (WHEEL_BASE / 2.0);
+    target_right_velocity = commanded_v + commanded_omega * (WHEEL_BASE / 2.0);
+}
+
+void wheelVelocityControl(){
+    float dt = sample_time / 1000.0f;
+
+    float left_error        = target_left_velocity - left_velocity;
+    left_error_sum         += left_error * dt;
+    float left_error_deriv  = (left_error - left_last_error) / dt;
+    float left_pwm          = Kp_left * left_error
+                            + Ki_left * left_error_sum
+                            + Kd_left * left_error_deriv;
+    left_last_error = left_error;
+
+    float right_error        = target_right_velocity - right_velocity;
+    right_error_sum         += right_error * dt;
+    float right_error_deriv  = (right_error - right_last_error) / dt;
+    float right_pwm          = Kp_right * right_error
+                             + Ki_right * right_error_sum
+                             + Kd_right * right_error_deriv;
+    right_last_error = right_error;
+
+    setMotor((int)constrain(left_pwm,  -MAX_PWM, MAX_PWM),
+             (int)constrain(right_pwm, -MAX_PWM, MAX_PWM));
 }
