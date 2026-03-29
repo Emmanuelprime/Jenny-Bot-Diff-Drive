@@ -10,12 +10,17 @@ LOOP_HZ  = 10
 LOOP_DT  = 1.0 / LOOP_HZ
 
 def parse_state(line):
-    """Parse ESP32 state: x,y,theta,mpu_angle"""
+    """Parse ESP32 state: x,y,theta,mpu_angle,leftPWM,rightPWM,base_speed,correction"""
     try:
         parts = line.strip().split(',')
-        if len(parts) != 4:
+        if len(parts) == 4:
+            # Old format without debug info
+            return tuple(float(p) for p in parts) + (0, 0, 0.0, 0.0)
+        elif len(parts) == 8:
+            # New format with debug info
+            return tuple(float(p) for p in parts)
+        else:
             return None
-        return tuple(float(p) for p in parts)
     except:
         return None
 
@@ -43,14 +48,14 @@ def main(target_x, target_y):
             time.sleep(max(0.0, LOOP_DT - (time.time() - loop_start)))
             continue
 
-        x, y, theta, mpu_angle = state
+        x, y, theta, mpu_angle, leftPWM, rightPWM, base_speed, correction = state
         
         # Calculate distance to goal
         dx = target_x - x
         dy = target_y - y
         dist = math.sqrt(dx * dx + dy * dy)
         
-        print(f"Pos:({x:.1f},{y:.1f}) θ:{math.degrees(mpu_angle):.1f}° Dist:{dist:.1f}cm", end='')
+        print(f"Pos:({x:.1f},{y:.1f}) θ:{math.degrees(mpu_angle):.1f}° Dist:{dist:.1f}cm | PWM L:{int(leftPWM)} R:{int(rightPWM)} base:{base_speed:.0f} corr:{correction:.0f}", end='')
         
         if dist < 5.0 and not goal_reached:
             print(" ← GOAL REACHED!", end='')

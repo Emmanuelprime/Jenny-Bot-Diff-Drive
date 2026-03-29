@@ -22,10 +22,10 @@ MPU6050 mpu6050(Wire);
 volatile long right_encoder_count = 0;
 volatile long left_encoder_count = 0;
 
-const int MAX_PWM = 255;
+const int MAX_PWM = 255;  // Same as original working firmware
 const float WHEEL_RADIUS = 4.2;        
 const float WHEEL_BASE = 31.5;         
-const float ENCODER_TICKS_PER_REV = 207.0;  // Back to calibrated value
+const float ENCODER_TICKS_PER_REV = 207.0;  // = 207/3 (gear ratio correction)
 
 float left_distance = 0.0;
 float right_distance = 0.0;
@@ -40,15 +40,22 @@ unsigned long last_time = 0;
 unsigned long sample_time = 100; // 10 Hz like original
 
 // Commands from Python
-float target_x = 100.0;
+float target_x = 0.0;
 float target_y = 0.0;
+bool goal_received = false;  // Don't move until goal is received
 unsigned long last_cmd_time = 0;
 
 // Go-to-goal parameters (from working firmware)
 const float DISTANCE_THRESHOLD = 5.0;
-float Kp_heading = 55.0;
+float Kp_heading = 55.0;  // Same as original working firmware
 float Kp_velocity = 2.0;
-const int BASE_PWM = 170;
+const int BASE_PWM = 170;  // Same as original working firmware
+
+// Debug variables
+int debug_leftPWM = 0;
+int debug_rightPWM = 0;
+float debug_base_speed = 0.0;
+float debug_correction = 0.0;
 
 // Encoder ISRs
 void IRAM_ATTR right_encoder_ISR() {
@@ -114,13 +121,6 @@ void setMotor(int leftPWM, int rightPWM) {
     analogWrite(RIGHT_SPD_PIN, constrain(abs(rightPWM), 0, MAX_PWM));
 }
 
-// Deadzone for motors
-int applyDeadzone(int pwm) {
-    if (pwm > 0) return max(pwm, 40);
-    if (pwm < 0) return min(pwm, -40);
-    return 0;
-}
-
 // Odometry
 void Odometry() {
     long delta_left  = left_encoder_count - last_left_count;
@@ -158,6 +158,7 @@ void readPiCommand() {
             if (tx_ptr && ty_ptr) {
                 target_x = atof(tx_ptr+3);
                 target_y = atof(ty_ptr+4);
+                goal_received = true;  // Enable movement
                 last_cmd_time = millis();
             }
             idx = 0;
@@ -165,18 +166,28 @@ void readPiCommand() {
     }
 }
 
-// Send state to Pi: x,y,theta,mpu_angle
+// Send state to Pi: x,y,theta,mpu_angle,leftPWM,rightPWM,base_speed,correction
 void sendState() {
     Serial2.print(x,3); Serial2.print(',');
     Serial2.print(y,3); Serial2.print(',');
     Serial2.print(theta,4); Serial2.print(',');
-    Serial2.print(mpu_angle,4);
+    Serial2.print(mpu_angle,4); Serial2.print(',');
+    Serial2.print(debug_leftPWM); Serial2.print(',');
+    Serial2.print(debug_rightPWM); Serial2.print(',');
+    Serial2.print(debug_base_speed,1); Serial2.print(',');
+    Serial2.print(debug_correction,1);
     Serial2.println();
 }
 
 // PID velocity control
 // Direct PWM go-to-goal (from working firmware)
 void goToGoal() {
+    // Don't move until we receive a goal from Python
+    if (!goal_received) {
+        setMotor(0, 0);
+        return;
+    }
+    
     float distance_to_goal = sqrt(pow(target_x - x, 2) + pow(target_y - y, 2));
     
     if (distance_to_goal > DISTANCE_THRESHOLD) {
@@ -193,8 +204,21 @@ void goToGoal() {
         int leftPWM = base_speed - correction;
         int rightPWM = base_speed + correction;
         
+        // Enforce minimum PWM to overcome friction
+        if (leftPWM > 0 && leftPWM < 80) leftPWM = 80;
+        else if (leftPWM < 0 && leftPWM > -80) leftPWM = -80;
+        
+        if (rightPWM > 0 && rightPWM < 80) rightPWM = 80;
+        else if (rightPWM < 0 && rightPWM > -80) rightPWM = -80;
+        
         leftPWM = constrain(leftPWM, -MAX_PWM, MAX_PWM);
         rightPWM = constrain(rightPWM, -MAX_PWM, MAX_PWM);
+        
+        // Store for debug output to Pi
+        debug_leftPWM = leftPWM;
+        debug_rightPWM = rightPWM;
+        debug_base_speed = base_speed;
+        debug_correction = correction;
         
         setMotor(leftPWM, rightPWM);
     } else {
