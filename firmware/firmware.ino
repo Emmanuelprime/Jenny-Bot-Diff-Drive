@@ -34,6 +34,10 @@ float x = 0.0;
 float y = 0.0;
 float theta = 0.0;
 float mpu_angle = 0.0;
+float fused_theta = 0.0;
+
+// Complementary filter coefficient (0.98 = trust gyro more short-term, odometry corrects drift)
+const float ALPHA = 0.98;
 
 long last_left_count = 0;
 long last_right_count = 0;
@@ -142,6 +146,7 @@ void loop() {
     unsigned long current_time = millis();
     if (current_time - last_time >= sample_time) {
         Odometry();
+        sensorFusion();
         convertVelocityCommands();
         wheelVelocityControl();
         sendState();
@@ -170,8 +175,9 @@ void Odometry(){
 
     float delta_theta = (right_distance - left_distance) / WHEEL_BASE;
 
-    float delta_x = ((left_distance + right_distance) / 2) * cos(theta + delta_theta / 2.0);
-    float delta_y = ((left_distance + right_distance) / 2) * sin(theta + delta_theta / 2.0);
+    // Use fused_theta for position calculation (more accurate than raw odometry)
+    float delta_x = ((left_distance + right_distance) / 2) * cos(fused_theta + delta_theta / 2.0);
+    float delta_y = ((left_distance + right_distance) / 2) * sin(fused_theta + delta_theta / 2.0);
 
     x += delta_x;
     y += delta_y;
@@ -180,6 +186,16 @@ void Odometry(){
 
     while (theta > PI) theta -= 2 * PI;
     while (theta < -PI) theta += 2 * PI;
+}
+
+// Complementary filter for sensor fusion
+void sensorFusion() {
+    // Fuse MPU angle (short-term accurate) with odometry angle (long-term accurate)
+    fused_theta = ALPHA * mpu_angle + (1.0 - ALPHA) * theta;
+    
+    // Normalize to [-PI, PI]
+    while (fused_theta > PI) fused_theta -= 2 * PI;
+    while (fused_theta < -PI) fused_theta += 2 * PI;
 }
 
 void readPiCommand() {
@@ -210,7 +226,7 @@ void sendState() {
     Serial2.print(',');
     Serial2.print(y, 3);
     Serial2.print(',');
-    Serial2.print(theta, 4);
+    Serial2.print(fused_theta, 4);
     Serial2.print(',');
     Serial2.print(mpu_angle, 4);
     Serial2.print(',');
