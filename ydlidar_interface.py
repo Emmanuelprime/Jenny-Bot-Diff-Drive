@@ -16,21 +16,22 @@ POINTS_PER_PACKET = 12  # X3 sends 12 measurements per packet
 def parse_packet(packet_bytes):
     # X3 packet structure:
     # Byte 0: Header (0xAA)
-    # Byte 1: Start angle (in 0.01 degree units)
-    # Byte 2-37: Distance/Quality pairs (12 points, 3 bytes each)
+    # Bytes 1-2: Start angle LSB, MSB (16-bit, X3 encoding)
+    # Remaining bytes: Distance/Quality pairs (3 bytes each)
     
-    start_angle_raw = packet_bytes[1]
-    start_angle = start_angle_raw * 0.01  # Convert to degrees
+    start_angle_raw = packet_bytes[1] | (packet_bytes[2] << 8)
+    start_angle = (start_angle_raw >> 1) / 64.0  # X3 specific encoding
     
     points = []
-    for i in range(2, len(packet_bytes)-2, 3):
-        dist_raw = packet_bytes[i] | (packet_bytes[i+1] << 8)
-        quality = packet_bytes[i+2]
-        distance = dist_raw * DISTANCE_SCALE
-        if 0.02 < distance < 6.0:
-            points.append((distance, quality))
-        else:
-            points.append((0, 0))
+    for i in range(3, len(packet_bytes)-1, 3):
+        if i + 2 < len(packet_bytes):
+            dist_raw = packet_bytes[i] | (packet_bytes[i+1] << 8)
+            quality = packet_bytes[i+2]
+            distance = dist_raw * DISTANCE_SCALE
+            if 0.02 < distance < 6.0:
+                points.append((distance, quality))
+            else:
+                points.append((0, 0))
     return start_angle, points
 
 # ----------------------------
