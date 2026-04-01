@@ -14,6 +14,14 @@ POINTS_PER_PACKET = 12  # X3 sends 12 measurements per packet
 # Helper function to parse a single packet
 # ----------------------------
 def parse_packet(packet_bytes):
+    # X3 packet structure:
+    # Byte 0: Header (0xAA)
+    # Byte 1: Start angle (in 0.01 degree units)
+    # Byte 2-37: Distance/Quality pairs (12 points, 3 bytes each)
+    
+    start_angle_raw = packet_bytes[1]
+    start_angle = start_angle_raw * 0.01  # Convert to degrees
+    
     points = []
     for i in range(2, len(packet_bytes)-2, 3):
         dist_raw = packet_bytes[i] | (packet_bytes[i+1] << 8)
@@ -23,14 +31,14 @@ def parse_packet(packet_bytes):
             points.append((distance, quality))
         else:
             points.append((0, 0))
-    return points
+    return start_angle, points
 
 # ----------------------------
 # Generator for streaming LiDAR points
 # ----------------------------
 def stream_lidar(serial_port, points_per_packet=POINTS_PER_PACKET):
-    angle_step = 360 / points_per_packet
-    angle_offset = 0
+    angle_step = 360.0 / points_per_packet
+    
     while True:
         byte = serial_port.read(1)
         if not byte:
@@ -40,11 +48,12 @@ def stream_lidar(serial_port, points_per_packet=POINTS_PER_PACKET):
             if len(packet) != 11:
                 continue
             full_packet = bytearray([PACKET_HEADER]) + packet
-            points = parse_packet(full_packet)
+            start_angle, points = parse_packet(full_packet)
+            
             for i, (distance, quality) in enumerate(points):
-                angle = (angle_offset + i * angle_step) % 360
+                # Calculate actual angle for this point
+                angle = (start_angle + i * angle_step) % 360
                 yield angle, distance, quality
-            angle_offset = (angle_offset + len(points) * angle_step) % 360
 
 # ----------------------------
 # Usage example
