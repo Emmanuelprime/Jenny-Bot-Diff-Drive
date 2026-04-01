@@ -20,53 +20,74 @@ MAX_DISTANCE = 6.0  # meters
 point_buffer = deque(maxlen=MAX_POINTS)
 
 # ----------------------------
-# Parse LiDAR packet
+# Parse LiDAR packet (X3 protocol)
 # ----------------------------
 def parse_packet(packet_bytes):
-    # X3 packet structure:
-    # Byte 0: Header (0xAA)
-    # Bytes 1-2: Start angle LSB, MSB (in 0.01 degree units, 16-bit)
-    # Remaining bytes: Distance/Quality pairs
+    # X3 packet: 0xAA 0x55 CT LSN FSA(2) LSA(2) CS(2) [Data(3*LSN)]
+    if len(packet_bytes) < 10:
+        return None, []
     
-    start_angle_raw = packet_bytes[1] | (packet_bytes[2] << 8)
-    start_angle = (start_angle_raw >> 1) / 64.0  # X3 specific encoding
+    lsn = packet_bytes[3]  # Number of samples
+    
+    fsa_raw = packet_bytes[4] | (packet_bytes[5] << 8)
+    lsa_raw = packet_bytes[6] | (packet_bytes[7] << 8)
+    
+    start_angle = (fsa_raw >> 1) / 64.0
+    end_angle = (lsa_raw >> 1) / 64.0
+    
+    angle_diff = end_angle - start_angle
+    if angle_diff < 0:
+        angle_diff += 360
+    
+    angle_step = angle_diff / (lsn - 1) if lsn > 1 else 0
     
     points = []
-    for i in range(3, len(packet_bytes)-1, 3):
-        if i + 2 < len(packet_bytes):
-            dist_raw = packet_bytes[i] | (packet_bytes[i+1] << 8)
-            quality = packet_bytes[i+2]
-            distance = dist_raw * DISTANCE_SCALE
+    data_start = 10
+    
+    for i in range(lsn):
+        idx = data_start + i * 3
+        if idx + 2 < len(packet_bytes):
+            dist_raw = packet_bytes[idx] | (packet_bytes[idx+1] << 8)
+            quality = packet_bytes[idx+2]
+            distance = dist_raw * 0.25 * DISTANCE_SCALE
+            angle = (start_angle + i * angle_step) % 360
+            
             if 0.02 < distance < MAX_DISTANCE:
-                points.append((distance, quality))
-            else:
-                points.append((0, 0))
+                points.append((angle, distance, quality))
+    
     return start_angle, points
 
 # ----------------------------
 # Read LiDAR data
 # ----------------------------
 def read_lidar_data(ser):
-    angle_step = 360.0 / POINTS_PER_PACKET
-    
-    # Read multiple packets to fill buffer faster
     packets_read = 0
     
-    while packets_read < 5:  # Read 5 packets per update (60 points)
+    while packets_read < 3:  # Read 3 packets per update
         byte = ser.read(1)
         if not byte:
             continue
-        if byte[0] == PACKET_HEADER:
-            packet = ser.read(11)
-            if len(packet) != 11:
+        
+        if byte[0] == 0xAA:
+            second_byte = ser.read(1)
+            if not second_byte or second_byte[0] != 0x55:
                 continue
-            full_packet = bytearray([PACKET_HEADER]) + packet
+            
+            header = ser.read(8)
+            if len(header) != 8:
+                continue
+            
+            lsn = header[1]
+            data_bytes = lsn * 3
+            data = ser.read(data_bytes)
+            if len(data) != data_bytes:
+                continue
+            
+            full_packet = bytearray([0xAA, 0x55]) + header + data
             start_angle, points = parse_packet(full_packet)
             
-            for i, (distance, quality) in enumerate(points):
-                if distance > 0:
-                    # Use actual start angle from packet + offset for each point
-                    angle = (start_angle + i * angle_step) % 360
+            if start_angle is not None:
+                for angle, distance, quality in points:
                     point_buffer.append((angle, distance))
             
             packets_read += 1

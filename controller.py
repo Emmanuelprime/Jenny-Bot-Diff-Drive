@@ -11,9 +11,7 @@ BAUD_RATE   = 115200
 # YDLidar Configuration
 LIDAR_PORT = "/dev/ttyUSB0"
 LIDAR_BAUDRATE = 115200
-LIDAR_PACKET_HEADER = 0xAA
 LIDAR_DISTANCE_SCALE = 0.001  # mm to meters
-LIDAR_POINTS_PER_PACKET = 12
 
 WHEEL_BASE   = 31.5
 MAX_LINEAR_VEL  = 50.0
@@ -40,16 +38,39 @@ class LidarThread(threading.Thread):
         self.ser = None
         
     def parse_packet(self, packet_bytes):
+        # X3 packet: 0xAA 0x55 CT LSN FSA(2) LSA(2) CS(2) [Data(3*LSN)]
+        if len(packet_bytes) < 10:
+            return None, []
+        
+        lsn = packet_bytes[3]  # Number of samples
+        
+        fsa_raw = packet_bytes[4] | (packet_bytes[5] << 8)
+        lsa_raw = packet_bytes[6] | (packet_bytes[7] << 8)
+        
+        start_angle = (fsa_raw >> 1) / 64.0
+        end_angle = (lsa_raw >> 1) / 64.0
+        
+        angle_diff = end_angle - start_angle
+        if angle_diff < 0:
+            angle_diff += 360
+        
+        angle_step = angle_diff / (lsn - 1) if lsn > 1 else 0
+        
         points = []
-        for i in range(2, len(packet_bytes)-2, 3):
-            dist_raw = packet_bytes[i] | (packet_bytes[i+1] << 8)
-            quality = packet_bytes[i+2]
-            distance = dist_raw * LIDAR_DISTANCE_SCALE
-            if 0.02 < distance < 6.0:
-                points.append((distance, quality))
-            else:
-                points.append((0, 0))
-        return points
+        data_start = 10
+        
+        for i in range(lsn):
+            idx = data_start + i * 3
+            if idx + 2 < len(packet_bytes):
+                dist_raw = packet_bytes[idx] | (packet_bytes[idx+1] << 8)
+                quality = packet_bytes[idx+2]
+                distance = dist_raw * 0.25 * LIDAR_DISTANCE_SCALE
+                angle = (start_angle + i * angle_step) % 360
+                
+                if 0.02 < distance < 6.0:
+                    points.append((angle, distance, quality))
+        
+        return start_angle, points
     
     def run(self):
         try:
@@ -57,26 +78,33 @@ class LidarThread(threading.Thread):
             self.running = True
             print(f"LiDAR connected on {self.port}")
             
-            angle_step = 360 / LIDAR_POINTS_PER_PACKET
-            angle_offset = 0
-            
             while self.running:
                 byte = self.ser.read(1)
                 if not byte:
                     continue
-                if byte[0] == LIDAR_PACKET_HEADER:
-                    packet = self.ser.read(11)
-                    if len(packet) != 11:
+                
+                if byte[0] == 0xAA:
+                    second_byte = self.ser.read(1)
+                    if not second_byte or second_byte[0] != 0x55:
                         continue
-                    full_packet = bytearray([LIDAR_PACKET_HEADER]) + packet
-                    points = self.parse_packet(full_packet)
                     
-                    with lidar_lock:
-                        for i, (distance, quality) in enumerate(points):
-                            angle = (angle_offset + i * angle_step) % 360
-                            lidar_data.append((angle, distance, quality, time.time()))
+                    header = self.ser.read(8)
+                    if len(header) != 8:
+                        continue
                     
-                    angle_offset = (angle_offset + len(points) * angle_step) % 360
+                    lsn = header[1]
+                    data_bytes = lsn * 3
+                    data = self.ser.read(data_bytes)
+                    if len(data) != data_bytes:
+                        continue
+                    
+                    full_packet = bytearray([0xAA, 0x55]) + header + data
+                    start_angle, points = self.parse_packet(full_packet)
+                    
+                    if start_angle is not None:
+                        with lidar_lock:
+                            for angle, distance, quality in points:
+                                lidar_data.append((angle, distance, quality, time.time()))
                     
         except Exception as e:
             print(f"LiDAR error: {e}")

@@ -11,50 +11,71 @@ DISTANCE_SCALE = 0.001  # mm to meters
 POINTS_PER_PACKET = 12  # X3 sends 12 measurements per packet
 
 # ----------------------------
-# Helper function to parse a single packet
+# Helper function to parse a single packet (X3 protocol)
 # ----------------------------
 def parse_packet(packet_bytes):
-    # X3 packet structure:
-    # Byte 0: Header (0xAA)
-    # Bytes 1-2: Start angle LSB, MSB (16-bit, X3 encoding)
-    # Remaining bytes: Distance/Quality pairs (3 bytes each)
+    # X3 packet: 0xAA 0x55 CT LSN FSA(2) LSA(2) CS(2) [Data(3*LSN)]
+    if len(packet_bytes) < 10:
+        return None, []
     
-    start_angle_raw = packet_bytes[1] | (packet_bytes[2] << 8)
-    start_angle = (start_angle_raw >> 1) / 64.0  # X3 specific encoding
+    lsn = packet_bytes[3]  # Number of samples
+    
+    fsa_raw = packet_bytes[4] | (packet_bytes[5] << 8)
+    lsa_raw = packet_bytes[6] | (packet_bytes[7] << 8)
+    
+    start_angle = (fsa_raw >> 1) / 64.0
+    end_angle = (lsa_raw >> 1) / 64.0
+    
+    angle_diff = end_angle - start_angle
+    if angle_diff < 0:
+        angle_diff += 360
+    
+    angle_step = angle_diff / (lsn - 1) if lsn > 1 else 0
     
     points = []
-    for i in range(3, len(packet_bytes)-1, 3):
-        if i + 2 < len(packet_bytes):
-            dist_raw = packet_bytes[i] | (packet_bytes[i+1] << 8)
-            quality = packet_bytes[i+2]
-            distance = dist_raw * DISTANCE_SCALE
-            if 0.02 < distance < 6.0:
-                points.append((distance, quality))
-            else:
-                points.append((0, 0))
+    data_start = 10
+    
+    for i in range(lsn):
+        idx = data_start + i * 3
+        if idx + 2 < len(packet_bytes):
+            dist_raw = packet_bytes[idx] | (packet_bytes[idx+1] << 8)
+            quality = packet_bytes[idx+2]
+            distance = dist_raw * 0.25 * DISTANCE_SCALE
+            angle = (start_angle + i * angle_step) % 360
+            points.append((angle, distance, quality))
+    
     return start_angle, points
 
 # ----------------------------
 # Generator for streaming LiDAR points
 # ----------------------------
 def stream_lidar(serial_port, points_per_packet=POINTS_PER_PACKET):
-    angle_step = 360.0 / points_per_packet
-    
     while True:
         byte = serial_port.read(1)
         if not byte:
             continue
-        if byte[0] == PACKET_HEADER:
-            packet = serial_port.read(11)
-            if len(packet) != 11:
+        
+        if byte[0] == 0xAA:
+            second_byte = serial_port.read(1)
+            if not second_byte or second_byte[0] != 0x55:
                 continue
-            full_packet = bytearray([PACKET_HEADER]) + packet
+            
+            header = serial_port.read(8)
+            if len(header) != 8:
+                continue
+            
+            lsn = header[1]
+            data_bytes = lsn * 3
+            data = serial_port.read(data_bytes)
+            if len(data) != data_bytes:
+                continue
+            
+            full_packet = bytearray([0xAA, 0x55]) + header + data
             start_angle, points = parse_packet(full_packet)
             
-            for i, (distance, quality) in enumerate(points):
-                # Calculate actual angle for this point
-                angle = (start_angle + i * angle_step) % 360
-                yield angle, distance, quality
+            if start_angle is not None:
+                for angle, distance, quality in points:
+                    yield angle, distance, quality
 
 # ----------------------------
 # Usage example
