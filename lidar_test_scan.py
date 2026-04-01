@@ -11,22 +11,58 @@ DISTANCE_SCALE = 0.001  # mm to meters
 POINTS_PER_PACKET = 12
 
 # ----------------------------
-# Parse LiDAR packet
+# Parse LiDAR packet (X3 protocol)
 # ----------------------------
 def parse_packet(packet_bytes):
-    start_angle_raw = packet_bytes[1] | (packet_bytes[2] << 8)
-    start_angle = (start_angle_raw >> 1) / 64.0
+    # X3 packet: 0xAA 0x55 CT LSN FSA(2) LSA(2) CS(2) [Data(3*LSN)]
+    # CT = packet type
+    # LSN = number of sample points (usually 8)
+    # FSA = start angle (16-bit)
+    # LSA = end angle (16-bit)
+    # CS = checksum (2 bytes)
+    # Data = distance(2) + intensity(1) for each sample
     
+    if len(packet_bytes) < 10:
+        return None, []
+    
+    ct = packet_bytes[2]
+    lsn = packet_bytes[3]  # Number of samples
+    
+    fsa_raw = packet_bytes[4] | (packet_bytes[5] << 8)
+    lsa_raw = packet_bytes[6] | (packet_bytes[7] << 8)
+    
+    # Decode angles (X3 format: angle = raw / 64)
+    start_angle = (fsa_raw >> 1) / 64.0
+    end_angle = (lsa_raw >> 1) / 64.0
+    
+    # Calculate angle step between samples
+    angle_diff = end_angle - start_angle
+    if angle_diff < 0:
+        angle_diff += 360
+    
+    if lsn > 1:
+        angle_step = angle_diff / (lsn - 1)
+    else:
+        angle_step = 0
+    
+    # Parse distance data (starts at byte 10)
     points = []
-    for i in range(3, len(packet_bytes)-1, 3):
-        if i + 2 < len(packet_bytes):
-            dist_raw = packet_bytes[i] | (packet_bytes[i+1] << 8)
-            quality = packet_bytes[i+2]
-            distance = dist_raw * DISTANCE_SCALE
+    data_start = 10
+    
+    for i in range(lsn):
+        idx = data_start + i * 3
+        if idx + 2 < len(packet_bytes):
+            dist_raw = packet_bytes[idx] | (packet_bytes[idx+1] << 8)
+            quality = packet_bytes[idx+2]
+            distance = dist_raw * 0.25 * DISTANCE_SCALE  # X3 uses 0.25mm units
+            
+            angle = (start_angle + i * angle_step) % 360
+            
             if 0.02 < distance < 6.0:
-                points.append((distance, quality))
+                points.append((angle, distance, quality))
             else:
-                points.append((0, 0))
+                points.append((angle, 0, 0))
+    
     return start_angle, points
 
 # ----------------------------
