@@ -70,11 +70,10 @@ def parse_packet(packet_bytes):
 # ----------------------------
 def collect_full_scan(ser):
     scan_data = {}  # angle -> (distance, quality)
-    angle_step = 360.0 / POINTS_PER_PACKET
     
     start_collection = None
     packets_collected = 0
-    max_packets = 50  # Should cover multiple full rotations
+    max_packets = 100  # Should cover multiple full rotations
     
     print("Collecting 360° scan data...")
     print("Please wait...\n")
@@ -83,20 +82,36 @@ def collect_full_scan(ser):
         byte = ser.read(1)
         if not byte:
             continue
-        if byte[0] == PACKET_HEADER:
-            packet = ser.read(11)
-            if len(packet) != 11:
+        
+        # Look for packet header 0xAA 0x55
+        if byte[0] == 0xAA:
+            second_byte = ser.read(1)
+            if not second_byte or second_byte[0] != 0x55:
                 continue
             
-            full_packet = bytearray([PACKET_HEADER]) + packet
+            # Read rest of header: CT, LSN, FSA(2), LSA(2), CS(2) = 8 bytes
+            header = ser.read(8)
+            if len(header) != 8:
+                continue
+            
+            lsn = header[1]  # Number of sample points
+            data_bytes = lsn * 3  # Each sample is 3 bytes
+            
+            # Read the data section
+            data = ser.read(data_bytes)
+            if len(data) != data_bytes:
+                continue
+            
+            # Construct full packet
+            full_packet = bytearray([0xAA, 0x55]) + header + data
+            
             start_angle, points = parse_packet(full_packet)
             
-            if start_collection is None:
-                start_collection = start_angle
+            if start_angle is None:
+                continue
             
-            for i, (distance, quality) in enumerate(points):
-                angle = (start_angle + i * angle_step) % 360
-                angle_key = int(angle)  # Round to nearest degree
+            for angle, distance, quality in points:
+                angle_key = int(round(angle))  # Round to nearest degree
                 
                 # Store the measurement (keep most recent)
                 if distance > 0:
