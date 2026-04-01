@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jenny Bot Controller</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            display: flex;
+            height: 100vh;
+        }
+        .sidebar {
+            width: 350px;
+            background: #2a2a2a;
+            padding: 20px;
+            overflow-y: auto;
+            border-right: 1px solid #3a3a3a;
+        }
+        .main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+        h1 {
+            font-size: 24px;
+            margin-bottom: 20px;
+            color: #4CAF50;
+        }
+        h2 {
+            font-size: 18px;
+            margin: 20px 0 10px 0;
+            color: #2196F3;
+        }
+        .status {
+            padding: 15px;
+            background: #333;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .status-item {
+            display: flex;
+            justify-content: space-between;
+            margin: 8px 0;
+            font-size: 14px;
+        }
+        .status-label {
+            color: #888;
+        }
+        .status-value {
+            color: #fff;
+            font-weight: bold;
+        }
+        .btn {
+            width: 100%;
+            padding: 12px;
+            margin: 8px 0;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: 600;
+        }
+        .btn-primary {
+            background: #4CAF50;
+            color: white;
+        }
+        .btn-primary:hover {
+            background: #45a049;
+        }
+        .btn-danger {
+            background: #f44336;
+            color: white;
+        }
+        .btn-danger:hover {
+            background: #d32f2f;
+        }
+        .btn-secondary {
+            background: #555;
+            color: white;
+        }
+        .btn-secondary:hover {
+            background: #666;
+        }
+        .btn:disabled {
+            background: #444;
+            color: #888;
+            cursor: not-allowed;
+        }
+        .waypoint-input {
+            background: #333;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+        }
+        input {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0;
+            background: #444;
+            border: 1px solid #555;
+            border-radius: 4px;
+            color: #fff;
+            font-size: 14px;
+        }
+        input:focus {
+            outline: none;
+            border-color: #2196F3;
+        }
+        .waypoint-list {
+            max-height: 200px;
+            overflow-y: auto;
+            background: #333;
+            padding: 10px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+        }
+        .waypoint-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px;
+            background: #444;
+            margin: 5px 0;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+        .waypoint-item button {
+            padding: 4px 8px;
+            background: #f44336;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        canvas {
+            background: #1a1a1a;
+            border-left: 1px solid #3a3a3a;
+        }
+        .connection-status {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .connected {
+            background: #4CAF50;
+        }
+        .disconnected {
+            background: #f44336;
+        }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <h1>🤖 Jenny Bot</h1>
+        
+        <div class="status">
+            <h2>Connection</h2>
+            <div class="status-item">
+                <span class="status-label">Server:</span>
+                <span>
+                    <span class="connection-status" id="serverStatus"></span>
+                    <span id="serverText">Disconnected</span>
+                </span>
+            </div>
+            <button class="btn btn-primary" id="connectBtn" onclick="connect()">Connect Robot</button>
+            <button class="btn btn-secondary" id="disconnectBtn" onclick="disconnect()" disabled>Disconnect</button>
+        </div>
+
+        <div class="status">
+            <h2>Robot State</h2>
+            <div class="status-item">
+                <span class="status-label">Position:</span>
+                <span class="status-value" id="position">-</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Heading:</span>
+                <span class="status-value" id="heading">-</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Target:</span>
+                <span class="status-value" id="target">-</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Distance:</span>
+                <span class="status-value" id="distance">-</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Status:</span>
+                <span class="status-value" id="navStatus">-</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Velocity:</span>
+                <span class="status-value" id="velocity">-</span>
+            </div>
+        </div>
+
+        <h2>Waypoints</h2>
+        <div class="waypoint-input">
+            <input type="number" id="wpX" placeholder="X (cm)" step="any">
+            <input type="number" id="wpY" placeholder="Y (cm)" step="any">
+            <input type="number" id="wpTheta" placeholder="Theta (degrees, optional)" step="any">
+            <button class="btn btn-primary" onclick="addWaypoint()">Add Waypoint</button>
+        </div>
+
+        <div class="waypoint-list" id="waypointList"></div>
+
+        <button class="btn btn-primary" id="startBtn" onclick="startNavigation()" disabled>Start Navigation</button>
+        <button class="btn btn-danger" id="stopBtn" onclick="stopNavigation()" disabled>Stop</button>
+    </div>
+
+    <div class="main">
+        <canvas id="canvas"></canvas>
+    </div>
+
+    <script>
+        const socket = io();
+        let waypoints = [];
+        let trajectory = [];
+        let robotX = 0, robotY = 0, robotTheta = 0;
+        let targetX = 0, targetY = 0;
+        let isNavigating = false;
+
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
+        function resizeCanvas() {
+            canvas.width = canvas.offsetWidth;
+            canvas.height = canvas.offsetHeight;
+            draw();
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        socket.on('connected', (data) => {
+            document.getElementById('serverStatus').className = 'connection-status connected';
+            document.getElementById('serverText').textContent = 'Connected';
+        });
+
+        socket.on('disconnect', () => {
+            document.getElementById('serverStatus').className = 'connection-status disconnected';
+            document.getElementById('serverText').textContent = 'Disconnected';
+        });
+
+        socket.on('robot_state', (data) => {
+            robotX = data.x;
+            robotY = data.y;
+            robotTheta = data.theta;
+            targetX = data.target_x;
+            targetY = data.target_y;
+
+            trajectory.push({x: robotX, y: robotY});
+            if (trajectory.length > 500) trajectory.shift();
+
+            document.getElementById('position').textContent = `(${data.x}, ${data.y})`;
+            document.getElementById('heading').textContent = `${data.theta}°`;
+            document.getElementById('target').textContent = `(${data.target_x}, ${data.target_y})`;
+            document.getElementById('distance').textContent = `${data.distance} cm`;
+            document.getElementById('navStatus').textContent = `${data.status} (WP ${data.waypoint}/${data.total_waypoints})`;
+            document.getElementById('velocity').textContent = `v=${data.v}, ω=${data.omega}`;
+
+            draw();
+        });
+
+        socket.on('navigation_complete', (data) => {
+            isNavigating = false;
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+            alert('Navigation complete!');
+        });
+
+        async function connect() {
+            const response = await fetch('/api/connect', {method: 'POST'});
+            const data = await response.json();
+            if (data.status === 'success') {
+                document.getElementById('connectBtn').disabled = true;
+                document.getElementById('disconnectBtn').disabled = false;
+                document.getElementById('startBtn').disabled = waypoints.length === 0;
+            } else {
+                alert('Failed to connect: ' + data.message);
+            }
+        }
+
+        async function disconnect() {
+            await fetch('/api/disconnect', {method: 'POST'});
+            document.getElementById('connectBtn').disabled = false;
+            document.getElementById('disconnectBtn').disabled = true;
+            document.getElementById('startBtn').disabled = true;
+        }
+
+        function addWaypoint() {
+            const x = parseFloat(document.getElementById('wpX').value);
+            const y = parseFloat(document.getElementById('wpY').value);
+            const theta = document.getElementById('wpTheta').value;
+
+            if (isNaN(x) || isNaN(y)) {
+                alert('Please enter valid X and Y coordinates');
+                return;
+            }
+
+            const wp = {x, y, theta: theta ? parseFloat(theta) : null};
+            waypoints.push(wp);
+            updateWaypointList();
+            draw();
+
+            document.getElementById('wpX').value = '';
+            document.getElementById('wpY').value = '';
+            document.getElementById('wpTheta').value = '';
+
+            if (!document.getElementById('connectBtn').disabled) {
+                document.getElementById('startBtn').disabled = false;
+            }
+        }
+
+        function removeWaypoint(index) {
+            waypoints.splice(index, 1);
+            updateWaypointList();
+            draw();
+        }
+
+        function updateWaypointList() {
+            const list = document.getElementById('waypointList');
+            list.innerHTML = '';
+            waypoints.forEach((wp, i) => {
+                const div = document.createElement('div');
+                div.className = 'waypoint-item';
+                const text = wp.theta !== null ? 
+                    `WP${i+1}: (${wp.x}, ${wp.y}, ${wp.theta}°)` : 
+                    `WP${i+1}: (${wp.x}, ${wp.y})`;
+                div.innerHTML = `<span>${text}</span><button onclick="removeWaypoint(${i})">Remove</button>`;
+                list.appendChild(div);
+            });
+        }
+
+        async function startNavigation() {
+            if (waypoints.length === 0) {
+                alert('Please add at least one waypoint');
+                return;
+            }
+
+            const response = await fetch('/api/start', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({waypoints})
+            });
+
+            const data = await response.json();
+            if (data.status === 'success') {
+                isNavigating = true;
+                trajectory = [];
+                document.getElementById('startBtn').disabled = true;
+                document.getElementById('stopBtn').disabled = false;
+            } else {
+                alert('Failed to start: ' + data.message);
+            }
+        }
+
+        async function stopNavigation() {
+            await fetch('/api/stop', {method: 'POST'});
+            isNavigating = false;
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+        }
+
+        function worldToScreen(x, y) {
+            const scale = Math.min(canvas.width, canvas.height) / 300;
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            return {
+                x: centerX + x * scale,
+                y: centerY - y * scale
+            };
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 1;
+            for (let i = -150; i <= 150; i += 25) {
+                const start = worldToScreen(i, -150);
+                const end = worldToScreen(i, 150);
+                ctx.beginPath();
+                ctx.moveTo(start.x, start.y);
+                ctx.lineTo(end.x, end.y);
+                ctx.stroke();
+
+                const startH = worldToScreen(-150, i);
+                const endH = worldToScreen(150, i);
+                ctx.beginPath();
+                ctx.moveTo(startH.x, startH.y);
+                ctx.lineTo(endH.x, endH.y);
+                ctx.stroke();
+            }
+
+            ctx.strokeStyle = '#555';
+            ctx.lineWidth = 2;
+            const originH = worldToScreen(0, 0);
+            ctx.beginPath();
+            ctx.moveTo(0, originH.y);
+            ctx.lineTo(canvas.width, originH.y);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(originH.x, 0);
+            ctx.lineTo(originH.x, canvas.height);
+            ctx.stroke();
+
+            waypoints.forEach((wp, i) => {
+                const pos = worldToScreen(wp.x, wp.y);
+                ctx.fillStyle = '#4CAF50';
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, 8, 0, 2 * Math.PI);
+                ctx.fill();
+
+                ctx.fillStyle = '#fff';
+                ctx.font = '12px sans-serif';
+                ctx.fillText(`WP${i+1}`, pos.x + 12, pos.y + 4);
+
+                if (wp.theta !== null) {
+                    const angle = wp.theta * Math.PI / 180;
+                    const dx = Math.cos(angle) * 20;
+                    const dy = -Math.sin(angle) * 20;
+                    ctx.strokeStyle = '#4CAF50';
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.moveTo(pos.x, pos.y);
+                    ctx.lineTo(pos.x + dx, pos.y + dy);
+                    ctx.stroke();
+                }
+            });
+
+            if (trajectory.length > 1) {
+                ctx.strokeStyle = '#2196F3';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                const first = worldToScreen(trajectory[0].x, trajectory[0].y);
+                ctx.moveTo(first.x, first.y);
+                for (let i = 1; i < trajectory.length; i++) {
+                    const pos = worldToScreen(trajectory[i].x, trajectory[i].y);
+                    ctx.lineTo(pos.x, pos.y);
+                }
+                ctx.stroke();
+            }
+
+            if (robotX !== 0 || robotY !== 0) {
+                const pos = worldToScreen(robotX, robotY);
+                ctx.fillStyle = '#f44336';
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, 10, 0, 2 * Math.PI);
+                ctx.fill();
+
+                const angle = robotTheta * Math.PI / 180;
+                const dx = Math.cos(angle) * 25;
+                const dy = -Math.sin(angle) * 25;
+                ctx.strokeStyle = '#f44336';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.moveTo(pos.x, pos.y);
+                ctx.lineTo(pos.x + dx, pos.y + dy);
+                ctx.stroke();
+            }
+        }
+    </script>
+</body>
+</html>
