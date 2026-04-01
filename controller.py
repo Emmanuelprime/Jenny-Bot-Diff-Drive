@@ -2,9 +2,18 @@ import serial
 import math
 import time
 import sys
+import threading
+from collections import deque
 
 SERIAL_PORT = '/dev/serial0'
 BAUD_RATE   = 115200
+
+# YDLidar Configuration
+LIDAR_PORT = "/dev/ttyUSB0"
+LIDAR_BAUDRATE = 115200
+LIDAR_PACKET_HEADER = 0xAA
+LIDAR_DISTANCE_SCALE = 0.001  # mm to meters
+LIDAR_POINTS_PER_PACKET = 12
 
 WHEEL_BASE   = 31.5
 MAX_LINEAR_VEL  = 50.0
@@ -18,10 +27,88 @@ HEADING_THRESHOLD = 0.087
 LOOP_HZ  = 10
 LOOP_DT  = 1.0 / LOOP_HZ
 
+# Shared LiDAR data storage (thread-safe)
+lidar_data = deque(maxlen=1000)  # Store last 1000 points
+lidar_lock = threading.Lock()
+
+class LidarThread(threading.Thread):
+    def __init__(self, port, baudrate):
+        super().__init__(daemon=True)
+        self.port = port
+        self.baudrate = baudrate
+        self.running = False
+        self.ser = None
+        
+    def parse_packet(self, packet_bytes):
+        points = []
+        for i in range(2, len(packet_bytes)-2, 3):
+            dist_raw = packet_bytes[i] | (packet_bytes[i+1] << 8)
+            quality = packet_bytes[i+2]
+            distance = dist_raw * LIDAR_DISTANCE_SCALE
+            if 0.02 < distance < 6.0:
+                points.append((distance, quality))
+            else:
+                points.append((0, 0))
+        return points
+    
+    def run(self):
+        try:
+            self.ser = serial.Serial(self.port, self.baudrate, timeout=1)
+            self.running = True
+            print(f"LiDAR connected on {self.port}")
+            
+            angle_step = 360 / LIDAR_POINTS_PER_PACKET
+            angle_offset = 0
+            
+            while self.running:
+                byte = self.ser.read(1)
+                if not byte:
+                    continue
+                if byte[0] == LIDAR_PACKET_HEADER:
+                    packet = self.ser.read(11)
+                    if len(packet) != 11:
+                        continue
+                    full_packet = bytearray([LIDAR_PACKET_HEADER]) + packet
+                    points = self.parse_packet(full_packet)
+                    
+                    with lidar_lock:
+                        for i, (distance, quality) in enumerate(points):
+                            angle = (angle_offset + i * angle_step) % 360
+                            lidar_data.append((angle, distance, quality, time.time()))
+                    
+                    angle_offset = (angle_offset + len(points) * angle_step) % 360
+                    
+        except Exception as e:
+            print(f"LiDAR error: {e}")
+        finally:
+            if self.ser:
+                self.ser.close()
+            print("LiDAR disconnected")
+    
+    def stop(self):
+        self.running = False
+
 def normalize_angle(angle):
     while angle >  math.pi: angle -= 2 * math.pi
     while angle < -math.pi: angle += 2 * math.pi
     return angle
+
+def get_obstacles_in_cone(center_angle, cone_width=30, max_distance=1.0):
+    """
+    Get obstacles within a cone in front of the robot.
+    center_angle: direction in degrees (0 = forward)
+    cone_width: width of cone in degrees
+    max_distance: maximum distance to consider (meters)
+    Returns: list of (angle, distance) tuples
+    """
+    obstacles = []
+    with lidar_lock:
+        for angle, distance, quality, timestamp in lidar_data:
+            if distance > 0 and distance < max_distance:
+                angle_diff = abs((angle - center_angle + 180) % 360 - 180)
+                if angle_diff < cone_width / 2:
+                    obstacles.append((angle, distance))
+    return obstacles
 
 def go_to_goal(x, y, fused_theta, lv, rv):
     dx = target_x - x
@@ -60,6 +147,14 @@ def parse_state(line):
 def main(waypoints):
     ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0.05)
     global target_x, target_y
+    
+    # Start LiDAR thread
+    lidar_thread = None
+    try:
+        lidar_thread = LidarThread(LIDAR_PORT, LIDAR_BAUDRATE)
+        lidar_thread.start()
+    except Exception as e:
+        print(f"Warning: Could not start LiDAR: {e}")
     
     waypoint_index = 0
     target_x, target_y, desired_theta = waypoints[waypoint_index]
@@ -112,9 +207,14 @@ def main(waypoints):
                     all_waypoints_reached = True
 
             status = "ALIGN" if position_reached and not orientation_reached else "MOVE"
+            
+            # Get LiDAR point count
+            with lidar_lock:
+                lidar_points = len(lidar_data)
+            
             print(f"WP{waypoint_index+1}/{len(waypoints)} [{status}] Pos:({x:.1f},{y:.1f}) Goal:({target_x:.1f},{target_y:.1f}) "
                   f"Dist:{dist:.1f} Fused:{math.degrees(fused_theta):.1f}° "
-                  f"Err:{math.degrees(heading_error):.1f}° v:{v:.1f} ω:{omega:.2f}")
+                  f"Err:{math.degrees(heading_error):.1f}° v:{v:.1f} ω:{omega:.2f} LiDAR:{lidar_points}")
 
             cmd = f"v:{v:.3f},w:{omega:.4f}\n"
             ser.write(cmd.encode())
@@ -126,6 +226,9 @@ def main(waypoints):
         time.sleep(0.2)
     finally:
         ser.close()
+        if lidar_thread:
+            lidar_thread.stop()
+            lidar_thread.join(timeout=2)
 
 if __name__=="__main__":
     if len(sys.argv) < 3:
