@@ -13,7 +13,7 @@ BAUDRATE = 115200
 PACKET_HEADER = 0xAA
 DISTANCE_SCALE = 0.001  # mm to meters
 POINTS_PER_PACKET = 12
-MAX_POINTS = 360  # Keep one full rotation
+MAX_POINTS = 1500  # Keep multiple full rotations for smooth 360° view
 MAX_DISTANCE = 6.0  # meters
 
 # Store recent points
@@ -39,9 +39,12 @@ def parse_packet(packet_bytes):
 # ----------------------------
 def read_lidar_data(ser):
     angle_step = 360 / POINTS_PER_PACKET
+    
+    # Read multiple packets to fill buffer faster
+    packets_read = 0
     angle_offset = 0
     
-    while True:
+    while packets_read < 5:  # Read 5 packets per update (60 points)
         byte = ser.read(1)
         if not byte:
             continue
@@ -58,7 +61,7 @@ def read_lidar_data(ser):
                     point_buffer.append((angle, distance))
             
             angle_offset = (angle_offset + len(points) * angle_step) % 360
-            break
+            packets_read += 1
 
 # ----------------------------
 # Matplotlib setup (XY plot)
