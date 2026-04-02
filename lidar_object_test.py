@@ -159,6 +159,8 @@ def detect_objects(point_buffer):
     # Filter to front cone only
     front_points = filter_front_cone(point_buffer)
     
+    print(f"  After front cone filter: {len(front_points)} points (from {len(point_buffer)} total)")
+    
     if len(front_points) == 0:
         return []
     
@@ -189,6 +191,8 @@ def detect_objects(point_buffer):
         
         if MIN_CLUSTER_SIZE <= len(cluster) <= MAX_CLUSTER_SIZE:
             clusters.append(cluster)
+    
+    print(f"  Found {len(clusters)} valid clusters (rejected {sum(1 for i in range(len(visited)) if visited[i]) - sum(len(c) for c in clusters)} points)")
     
     # Calculate object properties
     objects = []
@@ -259,6 +263,15 @@ def main():
             
             # Collect scan
             point_buffer = collect_scan(ser, num_packets=50)
+            
+            # Debug: Show angle distribution
+            if point_buffer:
+                angles = [angle for angle, dist, ts in point_buffer]
+                print(f"\nCollected {len(point_buffer)} points")
+                print(f"  Angle range: {min(angles):.1f}° to {max(angles):.1f}°")
+                # Count how many in front cone (330-30° considering offset)
+                front_count = sum(1 for a in angles if a < 30 or a > 330)
+                print(f"  Points in front cone (0° ±30°): {front_count}")
             
             # Detect objects
             objects = detect_objects(point_buffer)
