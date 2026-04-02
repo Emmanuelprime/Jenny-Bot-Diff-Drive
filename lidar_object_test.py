@@ -10,7 +10,8 @@ PORT = "/dev/ttyUSB0"
 BAUDRATE = 115200
 DISTANCE_SCALE = 0.001  # mm to meters (internal)
 MAX_POINTS = 1000
-LIDAR_DATA_TIMEOUT = 0.5  # seconds - data older than this is stale
+# Note: No LIDAR_DATA_TIMEOUT used in this test script
+# because we collect a fresh scan for each test cycle
 
 # LiDAR angle calibration
 LIDAR_ANGLE_OFFSET = 60  # degrees - offset to align LiDAR front with robot front

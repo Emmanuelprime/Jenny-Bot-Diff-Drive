@@ -29,7 +29,11 @@ LOOP_DT  = 1.0 / LOOP_HZ
 # Shared LiDAR data storage (thread-safe)
 lidar_data = deque(maxlen=1000)  # Store last 1000 points
 lidar_lock = threading.Lock()
-LIDAR_DATA_TIMEOUT = 0.5  # seconds - data older than this is stale
+# Timestamp filtering is ENABLED for controller because:
+# - Background thread continuously streams data
+# - We need fresh data for real-time obstacle avoidance
+# - Prevents using stale sensor readings for navigation decisions
+LIDAR_DATA_TIMEOUT = 2.0  # seconds - increased from 0.5s for better reliability
 
 class LidarThread(threading.Thread):
     def __init__(self, port, baudrate):

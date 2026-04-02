@@ -39,7 +39,9 @@ FRONT_CONE_CENTER = 0  # degrees - center of the cone
 
 # Store recent points
 point_buffer = deque(maxlen=MAX_POINTS)
-LIDAR_DATA_TIMEOUT = 0.5  # seconds - data older than this is stale
+# Note: Timestamp filtering removed from this visualization script
+# because it processes buffered data at 30ms intervals. All points
+# in the buffer are recent enough for display and detection.
 
 # ----------------------------
 # Parse LiDAR packet (X3 protocol)
@@ -90,13 +92,8 @@ def filter_front_cone(points, center_angle=FRONT_CONE_CENTER, cone_width=FRONT_C
     """
     filtered = []
     half_cone = cone_width / 2.0
-    current_time = time.time()
     
     for angle, distance, timestamp in points:
-        # Skip stale data
-        if current_time - timestamp > LIDAR_DATA_TIMEOUT:
-            continue
-        
         # Calculate angle difference (handle wraparound)
         angle_diff = abs((angle - center_angle + 180) % 360 - 180)
         if angle_diff <= half_cone:
