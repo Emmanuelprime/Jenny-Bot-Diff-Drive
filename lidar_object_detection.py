@@ -22,8 +22,8 @@ LIDAR_ANGLE_OFFSET = 60  # degrees - offset to align LiDAR front with robot fron
 
 # Object detection parameters - DBSCAN clustering
 MAX_DETECTION_DISTANCE = 100  # cm - only process objects within this range (saves CPU)
-DBSCAN_EPS = 15  # cm - neighborhood distance (similar to old threshold)
-DBSCAN_MIN_SAMPLES = 3  # minimum points for a cluster core
+DBSCAN_EPS = 20  # cm - neighborhood distance (increased to merge object fragments)
+DBSCAN_MIN_SAMPLES = 4  # minimum points for a cluster core (increased to filter noise)
 MAX_CLUSTER_SIZE = 100  # maximum points in a cluster (filter out walls)
 
 # Field of view (front cone)
