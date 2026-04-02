@@ -5,7 +5,7 @@ from matplotlib.animation import FuncAnimation
 from matplotlib.patches import Circle
 from collections import deque
 import math
-
+import time
 # ----------------------------
 # Configuration
 # ----------------------------
