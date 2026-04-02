@@ -20,6 +20,10 @@ CLUSTER_DISTANCE_THRESHOLD = 0.15  # meters - points within this distance are sa
 MIN_CLUSTER_SIZE = 3  # minimum points to be considered an object
 MAX_CLUSTER_SIZE = 100  # maximum points in a cluster
 
+# Field of view (front cone)
+FRONT_CONE_ANGLE = 60  # degrees - only process points in this cone (0° = forward)
+FRONT_CONE_CENTER = 0  # degrees - center of the cone
+
 # Store recent points
 point_buffer = deque(maxlen=MAX_POINTS)
 
@@ -59,6 +63,26 @@ def parse_packet(packet_bytes):
                 points.append((angle, distance, quality))
     
     return start_angle, points
+
+# ----------------------------
+# Filter points to front cone
+# ----------------------------
+def filter_front_cone(points, center_angle=FRONT_CONE_CENTER, cone_width=FRONT_CONE_ANGLE):
+    """
+    Filter points to only include those in the front cone.
+    center_angle: direction in degrees (0 = forward)
+    cone_width: total width of cone in degrees
+    """
+    filtered = []
+    half_cone = cone_width / 2.0
+    
+    for angle, distance in points:
+        # Calculate angle difference (handle wraparound)
+        angle_diff = abs((angle - center_angle + 180) % 360 - 180)
+        if angle_diff <= half_cone:
+            filtered.append((angle, distance))
+    
+    return filtered
 
 # ----------------------------
 # Read LiDAR data
@@ -111,9 +135,15 @@ def detect_objects():
     if len(point_buffer) == 0:
         return []
     
+    # Filter to front cone only
+    front_points = filter_front_cone(list(point_buffer))
+    
+    if len(front_points) == 0:
+        return []
+    
     # Convert polar to Cartesian
     points_xy = []
-    for angle, distance in point_buffer:
+    for angle, distance in front_points:
         x, y = polar_to_cartesian(angle, distance)
         points_xy.append((x, y))
     
@@ -186,12 +216,20 @@ ax1.set_aspect('equal')
 ax1.grid(True, alpha=0.3)
 ax1.set_xlabel('X (meters)')
 ax1.set_ylabel('Y (meters)')
-ax1.set_title('Object Detection - XY View')
+ax1.set_title('Object Detection - Front 60° View')
 
 # Draw robot at center
 robot_circle = Circle((0, 0), 0.15, color='red', fill=True, alpha=0.5)
 ax1.add_patch(robot_circle)
 ax1.arrow(0, 0, 0, 0.3, head_width=0.1, head_length=0.1, fc='red', ec='red')
+
+# Draw field of view cone
+import matplotlib.patches as mpatches
+theta1 = 90 - FRONT_CONE_ANGLE/2  # matplotlib uses counter-clockwise from east
+theta2 = 90 + FRONT_CONE_ANGLE/2
+wedge = mpatches.Wedge((0, 0), MAX_DISTANCE, theta1, theta2, 
+                       alpha=0.1, color='yellow', label='Detection Zone')
+ax1.add_patch(wedge)
 
 scatter = ax1.scatter([], [], c='blue', s=5, alpha=0.4, label='LiDAR points')
 object_circles = []
@@ -276,6 +314,7 @@ if __name__ == "__main__":
         print(f"Connected to LiDAR on {PORT}")
         print("Object detection running... Close window to stop.")
         print(f"\nDetection parameters:")
+        print(f"  Field of view: {FRONT_CONE_ANGLE}° (front cone)")
         print(f"  Cluster distance threshold: {CLUSTER_DISTANCE_THRESHOLD}m")
         print(f"  Min cluster size: {MIN_CLUSTER_SIZE} points")
         print(f"  Max cluster size: {MAX_CLUSTER_SIZE} points")

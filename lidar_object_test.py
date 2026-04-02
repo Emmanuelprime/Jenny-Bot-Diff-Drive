@@ -17,6 +17,10 @@ MIN_CLUSTER_SIZE = 3
 MAX_CLUSTER_SIZE = 100
 DETECTION_RANGE = (0.1, 3.0)  # min and max distance in meters
 
+# Field of view (front cone)
+FRONT_CONE_ANGLE = 60  # degrees - only process points in this cone (0° = forward)
+FRONT_CONE_CENTER = 0  # degrees - center of the cone
+
 # ----------------------------
 # Parse LiDAR packet (X3 protocol)
 # ----------------------------
@@ -92,6 +96,26 @@ def collect_scan(ser, num_packets=50):
     return point_buffer
 
 # ----------------------------
+# Filter points to front cone
+# ----------------------------
+def filter_front_cone(points, center_angle=FRONT_CONE_CENTER, cone_width=FRONT_CONE_ANGLE):
+    """
+    Filter points to only include those in the front cone.
+    center_angle: direction in degrees (0 = forward)
+    cone_width: total width of cone in degrees
+    """
+    filtered = []
+    half_cone = cone_width / 2.0
+    
+    for angle, distance in points:
+        # Calculate angle difference (handle wraparound)
+        angle_diff = abs((angle - center_angle + 180) % 360 - 180)
+        if angle_diff <= half_cone:
+            filtered.append((angle, distance))
+    
+    return filtered
+
+# ----------------------------
 # Convert polar to Cartesian
 # ----------------------------
 def polar_to_cartesian(angle_deg, distance):
@@ -107,8 +131,14 @@ def detect_objects(point_buffer):
     if len(point_buffer) == 0:
         return []
     
+    # Filter to front cone only
+    front_points = filter_front_cone(point_buffer)
+    
+    if len(front_points) == 0:
+        return []
+    
     # Convert to Cartesian
-    points_xy = [polar_to_cartesian(angle, dist) for angle, dist in point_buffer]
+    points_xy = [polar_to_cartesian(angle, dist) for angle, dist in front_points]
     
     # Clustering
     clusters = []
@@ -189,6 +219,7 @@ def main():
     ser = serial.Serial(PORT, BAUDRATE, timeout=1)
     print(f"Connected to LiDAR on {PORT}\n")
     print(f"Object Detection Parameters:")
+    print(f"  Field of view: {FRONT_CONE_ANGLE}° (center at {FRONT_CONE_CENTER}°)")
     print(f"  Detection range: {DETECTION_RANGE[0]}-{DETECTION_RANGE[1]}m")
     print(f"  Cluster threshold: {CLUSTER_DISTANCE_THRESHOLD}m")
     print(f"  Min/Max points: {MIN_CLUSTER_SIZE}/{MAX_CLUSTER_SIZE}")
