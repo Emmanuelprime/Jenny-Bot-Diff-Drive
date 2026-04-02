@@ -35,7 +35,7 @@ def parse_packet(packet_bytes):
             angle = (start_angle + i * angle_step) % 360
             
             # Only show valid detections (not noise)
-            if 10 < distance_cm < 300:  # 10cm to 3m
+            if 10 < distance_cm < 300 and quality > 10:  # Filter out quality=0 noise
                 points.append((angle, distance_cm, quality))
     
     return start_angle, points
@@ -45,10 +45,11 @@ print("LIDAR REAL-TIME ANGLE TEST")
 print("="*70)
 print()
 print("INSTRUCTIONS:")
-print("1. Clear area around robot")
-print("2. Place ONE object at 50cm directly IN FRONT of robot")
-print("3. Watch the output - it will show angles where objects are detected")
-print("4. Press Ctrl+C to stop")
+print("1. Clear area around robot (remove close objects)")
+print("2. Place ONE object at 40-60cm directly IN FRONT of robot")
+print("3. Watch for 'Front object candidate' lines")
+print("4. Note the ANGLE shown - that's where LiDAR thinks front is")
+print("5. Press Ctrl+C to stop")
 print()
 print("="*70)
 print()
@@ -87,13 +88,21 @@ try:
             if start_angle is not None and len(points) > 0:
                 update_counter += 1
                 
-                # Show every 10th update to not spam too much
-                if update_counter % 10 == 0:
-                    # Find closest point
-                    closest = min(points, key=lambda p: p[1])
-                    angle, dist, qual = closest
+                # Show every 5th update
+                if update_counter % 5 == 0:
+                    # Filter to likely candidate range (30-80cm for 50cm object)
+                    candidates = [p for p in points if 30 < p[1] < 80]
                     
-                    print(f"Closest object: {dist:6.1f}cm at angle {angle:6.1f}° (Quality: {qual})")
+                    if candidates:
+                        # Find closest in candidate range
+                        closest = min(candidates, key=lambda p: p[1])
+                        angle, dist, qual = closest
+                        print(f"Front object candidate: {dist:6.1f}cm at angle {angle:6.1f}° (Q:{qual:3d})")
+                    else:
+                        # Show all points for debugging
+                        if len(points) > 0:
+                            for angle, dist, qual in sorted(points, key=lambda p: p[1])[:3]:
+                                print(f"  Detected: {dist:6.1f}cm at {angle:6.1f}° (Q:{qual:3d})")
 
 except KeyboardInterrupt:
     print("\n\nStopped")
