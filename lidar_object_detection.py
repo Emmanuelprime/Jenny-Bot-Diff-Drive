@@ -11,12 +11,14 @@ import math
 # ----------------------------
 PORT = "/dev/ttyUSB0"
 BAUDRATE = 115200
-DISTANCE_SCALE = 0.001  # mm to meters
+DISTANCE_SCALE = 0.001  # mm to meters (internal)
 MAX_POINTS = 1500
-MAX_DISTANCE = 6.0  # meters
+MAX_DISTANCE = 300.0  # cm (3 meters for display)
+UPDATE_INTERVAL = 30  # milliseconds - faster refresh
+PACKETS_PER_UPDATE = 5  # Read more packets per frame
 
 # Object detection parameters
-CLUSTER_DISTANCE_THRESHOLD = 0.15  # meters - points within this distance are same object
+CLUSTER_DISTANCE_THRESHOLD = 15  # cm - points within this distance are same object
 MIN_CLUSTER_SIZE = 3  # minimum points to be considered an object
 MAX_CLUSTER_SIZE = 100  # maximum points in a cluster
 
@@ -56,11 +58,12 @@ def parse_packet(packet_bytes):
         if idx + 2 < len(packet_bytes):
             dist_raw = packet_bytes[idx] | (packet_bytes[idx+1] << 8)
             quality = packet_bytes[idx+2]
-            distance = dist_raw * 0.25 * DISTANCE_SCALE
+            distance_m = dist_raw * 0.25 * DISTANCE_SCALE  # meters
+            distance_cm = distance_m * 100  # convert to cm
             angle = (start_angle + i * angle_step) % 360
             
-            if 0.02 < distance < MAX_DISTANCE:
-                points.append((angle, distance, quality))
+            if 2 < distance_cm < MAX_DISTANCE:  # 2cm to MAX_DISTANCE
+                points.append((angle, distance_cm, quality))
     
     return start_angle, points
 
@@ -90,7 +93,7 @@ def filter_front_cone(points, center_angle=FRONT_CONE_CENTER, cone_width=FRONT_C
 def read_lidar_data(ser):
     packets_read = 0
     
-    while packets_read < 3:  # Read 3 packets per update
+    while packets_read < PACKETS_PER_UPDATE:  # Read multiple packets for faster updates
         byte = ser.read(1)
         if not byte:
             continue
@@ -120,12 +123,12 @@ def read_lidar_data(ser):
             packets_read += 1
 
 # ----------------------------
-# Convert polar to Cartesian
+# Convert polar to Cartesian (in cm)
 # ----------------------------
-def polar_to_cartesian(angle_deg, distance):
+def polar_to_cartesian(angle_deg, distance_cm):
     angle_rad = math.radians(angle_deg)
-    x = distance * math.sin(angle_rad)
-    y = distance * math.cos(angle_rad)
+    x = distance_cm * math.sin(angle_rad)
+    y = distance_cm * math.cos(angle_rad)
     return x, y
 
 # ----------------------------
@@ -214,14 +217,14 @@ ax1.set_xlim(-MAX_DISTANCE, MAX_DISTANCE)
 ax1.set_ylim(-MAX_DISTANCE, MAX_DISTANCE)
 ax1.set_aspect('equal')
 ax1.grid(True, alpha=0.3)
-ax1.set_xlabel('X (meters)')
-ax1.set_ylabel('Y (meters)')
+ax1.set_xlabel('X (cm)')
+ax1.set_ylabel('Y (cm)')
 ax1.set_title('Object Detection - Front 60° View')
 
-# Draw robot at center
-robot_circle = Circle((0, 0), 0.15, color='red', fill=True, alpha=0.5)
+# Draw robot at center (15cm radius)
+robot_circle = Circle((0, 0), 15, color='red', fill=True, alpha=0.5)
 ax1.add_patch(robot_circle)
-ax1.arrow(0, 0, 0, 0.3, head_width=0.1, head_length=0.1, fc='red', ec='red')
+ax1.arrow(0, 0, 0, 30, head_width=10, head_length=10, fc='red', ec='red')
 
 # Draw field of view cone
 import matplotlib.patches as mpatches
@@ -295,10 +298,10 @@ def update(frame):
             for i, obj in enumerate(sorted(objects, key=lambda o: o['distance']), 1):
                 info_lines.append(
                     f"Object {i}:\n"
-                    f"  Position: ({obj['center'][0]:.2f}, {obj['center'][1]:.2f}) m\n"
-                    f"  Distance: {obj['distance']:.2f} m\n"
+                    f"  Position: ({obj['center'][0]:.1f}, {obj['center'][1]:.1f}) cm\n"
+                    f"  Distance: {obj['distance']:.1f} cm\n"
                     f"  Angle:    {obj['angle']:.1f}°\n"
-                    f"  Size:     {obj['radius']*2:.2f} m diameter\n"
+                    f"  Size:     {obj['radius']*2:.1f} cm diameter\n"
                     f"  Points:   {obj['points']}\n"
                 )
             
@@ -317,13 +320,14 @@ if __name__ == "__main__":
         print(f"Connected to LiDAR on {PORT}")
         print("Object detection running... Close window to stop.")
         print(f"\nDetection parameters:")
+        print(f"  Update rate: ~{1000/UPDATE_INTERVAL:.0f} Hz")
         print(f"  Field of view: {FRONT_CONE_ANGLE}° (front cone)")
-        print(f"  Cluster distance threshold: {CLUSTER_DISTANCE_THRESHOLD}m")
+        print(f"  Cluster distance threshold: {CLUSTER_DISTANCE_THRESHOLD}cm")
         print(f"  Min cluster size: {MIN_CLUSTER_SIZE} points")
         print(f"  Max cluster size: {MAX_CLUSTER_SIZE} points")
         print()
         
-        ani = FuncAnimation(fig, update, interval=100, blit=False, cache_frame_data=False)
+        ani = FuncAnimation(fig, update, interval=UPDATE_INTERVAL, blit=False, cache_frame_data=False)
         plt.tight_layout()
         plt.show()
         

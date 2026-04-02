@@ -11,7 +11,7 @@ BAUD_RATE   = 115200
 # YDLidar Configuration
 LIDAR_PORT = "/dev/ttyUSB0"
 LIDAR_BAUDRATE = 115200
-LIDAR_DISTANCE_SCALE = 0.001  # mm to meters
+LIDAR_DISTANCE_SCALE = 0.001  # mm to meters (internal conversion, output is in cm)
 
 WHEEL_BASE   = 31.5
 MAX_LINEAR_VEL  = 50.0
@@ -64,11 +64,12 @@ class LidarThread(threading.Thread):
             if idx + 2 < len(packet_bytes):
                 dist_raw = packet_bytes[idx] | (packet_bytes[idx+1] << 8)
                 quality = packet_bytes[idx+2]
-                distance = dist_raw * 0.25 * LIDAR_DISTANCE_SCALE
+                distance_m = dist_raw * 0.25 * LIDAR_DISTANCE_SCALE  # meters
+                distance_cm = distance_m * 100  # convert to cm
                 angle = (start_angle + i * angle_step) % 360
                 
-                if 0.02 < distance < 6.0:
-                    points.append((angle, distance, quality))
+                if 2 < distance_cm < 600:  # 2cm to 6m
+                    points.append((angle, distance_cm, quality))
         
         return start_angle, points
     
@@ -121,17 +122,18 @@ def normalize_angle(angle):
     while angle < -math.pi: angle += 2 * math.pi
     return angle
 
-def get_obstacles_in_cone(center_angle, cone_width=30, max_distance=1.0):
+def get_obstacles_in_cone(center_angle, cone_width=30, max_distance=100):
     """
     Get obstacles within a cone in front of the robot.
     center_angle: direction in degrees (0 = forward)
     cone_width: width of cone in degrees
-    max_distance: maximum distance to consider (meters)
+    max_distance: maximum distance to consider (centimeters)
     Returns: list of (angle, distance) tuples
     """
     obstacles = []
     with lidar_lock:
         for angle, distance, quality, timestamp in lidar_data:
+            # distance is in cm from the LiDAR thread
             if distance > 0 and distance < max_distance:
                 angle_diff = abs((angle - center_angle + 180) % 360 - 180)
                 if angle_diff < cone_width / 2:

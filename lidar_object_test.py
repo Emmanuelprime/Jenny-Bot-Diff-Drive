@@ -8,14 +8,14 @@ from collections import deque
 # ----------------------------
 PORT = "/dev/ttyUSB0"
 BAUDRATE = 115200
-DISTANCE_SCALE = 0.001  # mm to meters
+DISTANCE_SCALE = 0.001  # mm to meters (internal)
 MAX_POINTS = 1000
 
 # Object detection parameters
-CLUSTER_DISTANCE_THRESHOLD = 0.15  # meters
+CLUSTER_DISTANCE_THRESHOLD = 15  # cm
 MIN_CLUSTER_SIZE = 3
 MAX_CLUSTER_SIZE = 100
-DETECTION_RANGE = (0.1, 3.0)  # min and max distance in meters
+DETECTION_RANGE = (10, 300)  # min and max distance in cm
 
 # Field of view (front cone)
 FRONT_CONE_ANGLE = 60  # degrees - only process points in this cone (0° = forward)
@@ -49,11 +49,12 @@ def parse_packet(packet_bytes):
         if idx + 2 < len(packet_bytes):
             dist_raw = packet_bytes[idx] | (packet_bytes[idx+1] << 8)
             quality = packet_bytes[idx+2]
-            distance = dist_raw * 0.25 * DISTANCE_SCALE
+            distance_m = dist_raw * 0.25 * DISTANCE_SCALE  # meters
+            distance_cm = distance_m * 100  # convert to cm
             angle = (start_angle + i * angle_step) % 360
             
-            if DETECTION_RANGE[0] < distance < DETECTION_RANGE[1]:
-                points.append((angle, distance, quality))
+            if DETECTION_RANGE[0] < distance_cm < DETECTION_RANGE[1]:
+                points.append((angle, distance_cm, quality))
     
     return start_angle, points
 
@@ -116,12 +117,12 @@ def filter_front_cone(points, center_angle=FRONT_CONE_CENTER, cone_width=FRONT_C
     return filtered
 
 # ----------------------------
-# Convert polar to Cartesian
+# Convert polar to Cartesian (in cm)
 # ----------------------------
-def polar_to_cartesian(angle_deg, distance):
+def polar_to_cartesian(angle_deg, distance_cm):
     angle_rad = math.radians(angle_deg)
-    x = distance * math.sin(angle_rad)
-    y = distance * math.cos(angle_rad)
+    x = distance_cm * math.sin(angle_rad)
+    y = distance_cm * math.cos(angle_rad)
     return x, y
 
 # ----------------------------
@@ -194,16 +195,16 @@ def detect_objects(point_buffer):
 # ----------------------------
 # Get obstacles in specific sector
 # ----------------------------
-def get_obstacles_in_sector(objects, center_angle, cone_width=30, max_distance=1.0):
+def get_obstacles_in_sector(objects, center_angle, cone_width=30, max_distance_cm=100):
     """
     Filter objects within a cone/sector
     center_angle: direction in degrees (0 = forward)
     cone_width: width in degrees
-    max_distance: maximum distance to consider
+    max_distance_cm: maximum distance to consider in cm
     """
     obstacles = []
     for obj in objects:
-        if obj['distance'] > max_distance:
+        if obj['distance'] > max_distance_cm:
             continue
         
         angle_diff = abs((obj['angle'] - center_angle + 180) % 360 - 180)
@@ -220,8 +221,8 @@ def main():
     print(f"Connected to LiDAR on {PORT}\n")
     print(f"Object Detection Parameters:")
     print(f"  Field of view: {FRONT_CONE_ANGLE}° (center at {FRONT_CONE_CENTER}°)")
-    print(f"  Detection range: {DETECTION_RANGE[0]}-{DETECTION_RANGE[1]}m")
-    print(f"  Cluster threshold: {CLUSTER_DISTANCE_THRESHOLD}m")
+    print(f"  Detection range: {DETECTION_RANGE[0]}-{DETECTION_RANGE[1]}cm")
+    print(f"  Cluster threshold: {CLUSTER_DISTANCE_THRESHOLD}cm")
     print(f"  Min/Max points: {MIN_CLUSTER_SIZE}/{MAX_CLUSTER_SIZE}")
     print("\n" + "="*70)
     print()
@@ -246,18 +247,18 @@ def main():
             if objects:
                 for i, obj in enumerate(objects, 1):
                     print(f"\nObject {i}:")
-                    print(f"  Location:  ({obj['center'][0]:6.2f}, {obj['center'][1]:6.2f}) m")
-                    print(f"  Distance:  {obj['distance']:5.2f} m")
+                    print(f"  Location:  ({obj['center'][0]:6.1f}, {obj['center'][1]:6.1f}) cm")
+                    print(f"  Distance:  {obj['distance']:5.1f} cm")
                     print(f"  Angle:     {obj['angle']:6.1f}°")
-                    print(f"  Size:      {obj['radius']*2:5.2f} m diameter")
+                    print(f"  Size:      {obj['radius']*2:5.1f} cm diameter")
                     print(f"  Points:    {obj['points']}")
                 
-                # Check front sector
-                front_obstacles = get_obstacles_in_sector(objects, center_angle=0, cone_width=60, max_distance=1.0)
+                # Check front sector (100cm = 1m)
+                front_obstacles = get_obstacles_in_sector(objects, center_angle=0, cone_width=60, max_distance_cm=100)
                 if front_obstacles:
-                    print(f"\n⚠️  WARNING: {len(front_obstacles)} obstacle(s) in front (60° cone, <1m)")
+                    print(f"\n⚠️  WARNING: {len(front_obstacles)} obstacle(s) in front (60° cone, <100cm)")
                     for obs in front_obstacles:
-                        print(f"    - Distance: {obs['distance']:.2f}m at {obs['angle']:.1f}°")
+                        print(f"    - Distance: {obs['distance']:.1f}cm at {obs['angle']:.1f}°")
             else:
                 print("\nNo objects detected")
             
