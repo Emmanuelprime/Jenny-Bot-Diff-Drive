@@ -172,17 +172,20 @@ def parse_state(line):
         return tuple(float(p) for p in parts)
     except: return None
 
-def main(waypoints):
+def main(waypoints, use_lidar=False):
     ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0.05)
     global target_x, target_y
     
-    # Start LiDAR thread
+    # Start LiDAR thread only if requested
     lidar_thread = None
-    try:
-        lidar_thread = LidarThread(LIDAR_PORT, LIDAR_BAUDRATE)
-        lidar_thread.start()
-    except Exception as e:
-        print(f"Warning: Could not start LiDAR: {e}")
+    if use_lidar:
+        try:
+            lidar_thread = LidarThread(LIDAR_PORT, LIDAR_BAUDRATE)
+            lidar_thread.start()
+        except Exception as e:
+            print(f"Warning: Could not start LiDAR: {e}")
+    else:
+        print("LiDAR disabled (use --lidar to enable)")
     
     waypoint_index = 0
     target_x, target_y, desired_theta = waypoints[waypoint_index]
@@ -236,13 +239,16 @@ def main(waypoints):
 
             status = "ALIGN" if position_reached and not orientation_reached else "MOVE"
             
-            # Get LiDAR point count
-            with lidar_lock:
-                lidar_points = len(lidar_data)
+            # Get LiDAR point count if enabled
+            lidar_status = ""
+            if use_lidar:
+                with lidar_lock:
+                    lidar_points = len(lidar_data)
+                lidar_status = f" LiDAR:{lidar_points}"
             
             print(f"WP{waypoint_index+1}/{len(waypoints)} [{status}] Pos:({x:.1f},{y:.1f}) Goal:({target_x:.1f},{target_y:.1f}) "
                   f"Dist:{dist:.1f} Fused:{math.degrees(fused_theta):.1f}° "
-                  f"Err:{math.degrees(heading_error):.1f}° v:{v:.1f} ω:{omega:.2f} LiDAR:{lidar_points}")
+                  f"Err:{math.degrees(heading_error):.1f}° v:{v:.1f} ω:{omega:.2f}{lidar_status}")
 
             cmd = f"v:{v:.3f},w:{omega:.4f}\n"
             ser.write(cmd.encode())
@@ -260,15 +266,26 @@ def main(waypoints):
 
 if __name__=="__main__":
     if len(sys.argv) < 3:
-        print("Usage: python controller.py <x1> <y1> [theta1] [<x2> <y2> [theta2] ...]")
+        print("Usage: python controller.py [--lidar] <x1> <y1> [theta1] [<x2> <y2> [theta2] ...]")
+        print("Options:")
+        print("  --lidar    Enable LiDAR scanning (optional)")
+        print()
         print("Examples:")
         print("  python controller.py 100 0")
         print("  python controller.py 100 0 45")
+        print("  python controller.py --lidar 100 0")
         print("  python controller.py 50 50 100 0 45 50 -50 0")
         sys.exit(1)
     
+    # Check for --lidar flag
+    use_lidar = False
+    args_list = sys.argv[1:]
+    if '--lidar' in args_list:
+        use_lidar = True
+        args_list.remove('--lidar')
+    
     waypoints = []
-    args = [float(arg) for arg in sys.argv[1:]]
+    args = [float(arg) for arg in args_list]
     
     i = 0
     while i < len(args):
@@ -294,4 +311,5 @@ if __name__=="__main__":
             waypoints.append((x, y, None))
             i += 2
     
-    main(waypoints)
+    # Pass use_lidar flag to main
+    main(waypoints, use_lidar=use_lidar)
