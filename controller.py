@@ -11,7 +11,8 @@ BAUD_RATE   = 115200
 # YDLidar Configuration
 LIDAR_PORT = "/dev/ttyUSB0"
 LIDAR_BAUDRATE = 115200
-LIDAR_DISTANCE_SCALE = 0.001  # mm to meters
+LIDAR_DISTANCE_SCALE = 0.001  # mm to meters (internal conversion, output is in cm)
+LIDAR_ANGLE_OFFSET = 60  # degrees - offset to align LiDAR front with robot front
 
 WHEEL_BASE   = 31.5
 MAX_LINEAR_VEL  = 50.0
@@ -28,6 +29,11 @@ LOOP_DT  = 1.0 / LOOP_HZ
 # Shared LiDAR data storage (thread-safe)
 lidar_data = deque(maxlen=1000)  # Store last 1000 points
 lidar_lock = threading.Lock()
+# Timestamp filtering is ENABLED for controller because:
+# - Background thread continuously streams data
+# - We need fresh data for real-time obstacle avoidance
+# - Prevents using stale sensor readings for navigation decisions
+LIDAR_DATA_TIMEOUT = 2.0  # seconds - increased from 0.5s for better reliability
 
 class LidarThread(threading.Thread):
     def __init__(self, port, baudrate):
@@ -64,11 +70,12 @@ class LidarThread(threading.Thread):
             if idx + 2 < len(packet_bytes):
                 dist_raw = packet_bytes[idx] | (packet_bytes[idx+1] << 8)
                 quality = packet_bytes[idx+2]
-                distance = dist_raw * 0.25 * LIDAR_DISTANCE_SCALE
-                angle = (start_angle + i * angle_step) % 360
+                distance_m = dist_raw * 0.25 * LIDAR_DISTANCE_SCALE  # meters
+                distance_cm = distance_m * 100  # convert to cm
+                angle = (start_angle + i * angle_step + LIDAR_ANGLE_OFFSET) % 360
                 
-                if 0.02 < distance < 6.0:
-                    points.append((angle, distance, quality))
+                if 2 < distance_cm < 600:  # 2cm to 6m
+                    points.append((angle, distance_cm, quality))
         
         return start_angle, points
     
@@ -121,17 +128,24 @@ def normalize_angle(angle):
     while angle < -math.pi: angle += 2 * math.pi
     return angle
 
-def get_obstacles_in_cone(center_angle, cone_width=30, max_distance=1.0):
+def get_obstacles_in_cone(center_angle, cone_width=30, max_distance=100):
     """
     Get obstacles within a cone in front of the robot.
     center_angle: direction in degrees (0 = forward)
     cone_width: width of cone in degrees
-    max_distance: maximum distance to consider (meters)
+    max_distance: maximum distance to consider (centimeters)
     Returns: list of (angle, distance) tuples
     """
     obstacles = []
+    current_time = time.time()
+    
     with lidar_lock:
         for angle, distance, quality, timestamp in lidar_data:
+            # Skip stale data
+            if current_time - timestamp > LIDAR_DATA_TIMEOUT:
+                continue
+            
+            # distance is in cm from the LiDAR thread
             if distance > 0 and distance < max_distance:
                 angle_diff = abs((angle - center_angle + 180) % 360 - 180)
                 if angle_diff < cone_width / 2:
@@ -239,12 +253,14 @@ def main(waypoints, use_lidar=False):
 
             status = "ALIGN" if position_reached and not orientation_reached else "MOVE"
             
-            # Get LiDAR point count if enabled
+            # Get LiDAR point count if enabled (only fresh data)
             lidar_status = ""
             if use_lidar:
+                current_time = time.time()
                 with lidar_lock:
-                    lidar_points = len(lidar_data)
-                lidar_status = f" LiDAR:{lidar_points}"
+                    fresh_points = sum(1 for _, _, _, ts in lidar_data 
+                                      if current_time - ts <= LIDAR_DATA_TIMEOUT)
+                lidar_status = f" LiDAR:{fresh_points}"
             
             print(f"WP{waypoint_index+1}/{len(waypoints)} [{status}] Pos:({x:.1f},{y:.1f}) Goal:({target_x:.1f},{target_y:.1f}) "
                   f"Dist:{dist:.1f} Fused:{math.degrees(fused_theta):.1f}° "
