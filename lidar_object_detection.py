@@ -82,25 +82,6 @@ def parse_packet(packet_bytes):
     return start_angle, points
 
 # ----------------------------
-# Filter points to front cone
-# ----------------------------
-def filter_front_cone(points, center_angle=FRONT_CONE_CENTER, cone_width=FRONT_CONE_ANGLE):
-    """
-    Filter points to only include those in the front cone.
-    center_angle: direction in degrees (0 = forward)
-    cone_width: total width of cone in degrees
-    """
-    filtered = []
-    half_cone = cone_width / 2.0
-    
-    for angle, distance, timestamp in points:
-        # Calculate angle difference (handle wraparound)
-        angle_diff = abs((angle - center_angle + 180) % 360 - 180)
-        if angle_diff <= half_cone:
-            filtered.append((angle, distance))
-    
-    return filtered
-
 # ----------------------------
 # Read LiDAR data
 # ----------------------------

@@ -113,27 +113,6 @@ def collect_scan(ser, num_packets=50):
 # ----------------------------
 # Filter points to front cone
 # ----------------------------
-def filter_front_cone(points, center_angle=FRONT_CONE_CENTER, cone_width=FRONT_CONE_ANGLE):
-    """
-    Filter points to only include those in the front cone.
-    center_angle: direction in degrees (0 = forward)
-    cone_width: total width of cone in degrees
-    """
-    filtered = []
-    half_cone = cone_width / 2.0
-    
-    for angle, distance, timestamp in points:
-        # Note: No timestamp filtering here - we just collected this scan
-        # (timestamp filtering is more useful for continuous streaming)
-        
-        # Calculate angle difference (handle wraparound)
-        angle_diff = abs((angle - center_angle + 180) % 360 - 180)
-        if angle_diff <= half_cone:
-            filtered.append((angle, distance))
-    
-    return filtered
-
-# ----------------------------
 # DBSCAN Clustering Algorithm
 # ----------------------------
 def dbscan_clustering(points_xy, eps=DBSCAN_EPS, min_samples=DBSCAN_MIN_SAMPLES):
