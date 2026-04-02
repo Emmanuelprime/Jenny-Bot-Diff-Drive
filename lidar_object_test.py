@@ -120,12 +120,10 @@ def filter_front_cone(points, center_angle=FRONT_CONE_CENTER, cone_width=FRONT_C
     """
     filtered = []
     half_cone = cone_width / 2.0
-    current_time = time.time()
     
     for angle, distance, timestamp in points:
-        # Skip stale data
-        if current_time - timestamp > LIDAR_DATA_TIMEOUT:
-            continue
+        # Note: No timestamp filtering here - we just collected this scan
+        # (timestamp filtering is more useful for continuous streaming)
         
         # Calculate angle difference (handle wraparound)
         angle_diff = abs((angle - center_angle + 180) % 360 - 180)
