@@ -17,6 +17,9 @@ MAX_DISTANCE = 300.0  # cm (3 meters for display)
 UPDATE_INTERVAL = 30  # milliseconds - faster refresh
 PACKETS_PER_UPDATE = 5  # Read more packets per frame
 
+# LiDAR angle calibration
+LIDAR_ANGLE_OFFSET = 60  # degrees - offset to align LiDAR front with robot front
+
 # Object detection parameters
 CLUSTER_DISTANCE_THRESHOLD = 15  # cm - points within this distance are same object
 MIN_CLUSTER_SIZE = 3  # minimum points to be considered an object
@@ -69,7 +72,7 @@ def parse_packet(packet_bytes):
             quality = packet_bytes[idx+2]
             distance_m = dist_raw * 0.25 * DISTANCE_SCALE  # meters
             distance_cm = distance_m * 100  # convert to cm
-            angle = (start_angle + i * angle_step) % 360
+            angle = (start_angle + i * angle_step + LIDAR_ANGLE_OFFSET) % 360
             
             if 2 < distance_cm < MAX_DISTANCE:  # 2cm to MAX_DISTANCE
                 points.append((angle, distance_cm, quality))

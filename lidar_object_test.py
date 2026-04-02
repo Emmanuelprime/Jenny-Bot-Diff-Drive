@@ -12,6 +12,9 @@ DISTANCE_SCALE = 0.001  # mm to meters (internal)
 MAX_POINTS = 1000
 LIDAR_DATA_TIMEOUT = 0.5  # seconds - data older than this is stale
 
+# LiDAR angle calibration
+LIDAR_ANGLE_OFFSET = 60  # degrees - offset to align LiDAR front with robot front
+
 # Object detection parameters
 CLUSTER_DISTANCE_THRESHOLD = 15  # cm
 MIN_CLUSTER_SIZE = 3
@@ -60,7 +63,7 @@ def parse_packet(packet_bytes):
             quality = packet_bytes[idx+2]
             distance_m = dist_raw * 0.25 * DISTANCE_SCALE  # meters
             distance_cm = distance_m * 100  # convert to cm
-            angle = (start_angle + i * angle_step) % 360
+            angle = (start_angle + i * angle_step + LIDAR_ANGLE_OFFSET) % 360
             
             if DETECTION_RANGE[0] < distance_cm < DETECTION_RANGE[1]:
                 points.append((angle, distance_cm, quality))

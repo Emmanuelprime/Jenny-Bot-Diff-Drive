@@ -12,6 +12,7 @@ BAUD_RATE   = 115200
 LIDAR_PORT = "/dev/ttyUSB0"
 LIDAR_BAUDRATE = 115200
 LIDAR_DISTANCE_SCALE = 0.001  # mm to meters (internal conversion, output is in cm)
+LIDAR_ANGLE_OFFSET = 60  # degrees - offset to align LiDAR front with robot front
 
 WHEEL_BASE   = 31.5
 MAX_LINEAR_VEL  = 50.0
@@ -67,7 +68,7 @@ class LidarThread(threading.Thread):
                 quality = packet_bytes[idx+2]
                 distance_m = dist_raw * 0.25 * LIDAR_DISTANCE_SCALE  # meters
                 distance_cm = distance_m * 100  # convert to cm
-                angle = (start_angle + i * angle_step) % 360
+                angle = (start_angle + i * angle_step + LIDAR_ANGLE_OFFSET) % 360
                 
                 if 2 < distance_cm < 600:  # 2cm to 6m
                     points.append((angle, distance_cm, quality))
