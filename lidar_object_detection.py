@@ -1,0 +1,295 @@
+import serial
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+from matplotlib.patches import Circle
+from collections import deque
+import math
+
+# ----------------------------
+# Configuration
+# ----------------------------
+PORT = "/dev/ttyUSB0"
+BAUDRATE = 115200
+DISTANCE_SCALE = 0.001  # mm to meters
+MAX_POINTS = 1500
+MAX_DISTANCE = 6.0  # meters
+
+# Object detection parameters
+CLUSTER_DISTANCE_THRESHOLD = 0.15  # meters - points within this distance are same object
+MIN_CLUSTER_SIZE = 3  # minimum points to be considered an object
+MAX_CLUSTER_SIZE = 100  # maximum points in a cluster
+
+# Store recent points
+point_buffer = deque(maxlen=MAX_POINTS)
+
+# ----------------------------
+# Parse LiDAR packet (X3 protocol)
+# ----------------------------
+def parse_packet(packet_bytes):
+    if len(packet_bytes) < 10:
+        return None, []
+    
+    lsn = packet_bytes[3]  # Number of samples
+    
+    fsa_raw = packet_bytes[4] | (packet_bytes[5] << 8)
+    lsa_raw = packet_bytes[6] | (packet_bytes[7] << 8)
+    
+    start_angle = (fsa_raw >> 1) / 64.0
+    end_angle = (lsa_raw >> 1) / 64.0
+    
+    angle_diff = end_angle - start_angle
+    if angle_diff < 0:
+        angle_diff += 360
+    
+    angle_step = angle_diff / (lsn - 1) if lsn > 1 else 0
+    
+    points = []
+    data_start = 10
+    
+    for i in range(lsn):
+        idx = data_start + i * 3
+        if idx + 2 < len(packet_bytes):
+            dist_raw = packet_bytes[idx] | (packet_bytes[idx+1] << 8)
+            quality = packet_bytes[idx+2]
+            distance = dist_raw * 0.25 * DISTANCE_SCALE
+            angle = (start_angle + i * angle_step) % 360
+            
+            if 0.02 < distance < MAX_DISTANCE:
+                points.append((angle, distance, quality))
+    
+    return start_angle, points
+
+# ----------------------------
+# Read LiDAR data
+# ----------------------------
+def read_lidar_data(ser):
+    packets_read = 0
+    
+    while packets_read < 3:  # Read 3 packets per update
+        byte = ser.read(1)
+        if not byte:
+            continue
+        
+        if byte[0] == 0xAA:
+            second_byte = ser.read(1)
+            if not second_byte or second_byte[0] != 0x55:
+                continue
+            
+            header = ser.read(8)
+            if len(header) != 8:
+                continue
+            
+            lsn = header[1]
+            data_bytes = lsn * 3
+            data = ser.read(data_bytes)
+            if len(data) != data_bytes:
+                continue
+            
+            full_packet = bytearray([0xAA, 0x55]) + header + data
+            start_angle, points = parse_packet(full_packet)
+            
+            if start_angle is not None:
+                for angle, distance, quality in points:
+                    point_buffer.append((angle, distance))
+            
+            packets_read += 1
+
+# ----------------------------
+# Convert polar to Cartesian
+# ----------------------------
+def polar_to_cartesian(angle_deg, distance):
+    angle_rad = math.radians(angle_deg)
+    x = distance * math.sin(angle_rad)
+    y = distance * math.cos(angle_rad)
+    return x, y
+
+# ----------------------------
+# Cluster points into objects
+# ----------------------------
+def detect_objects():
+    if len(point_buffer) == 0:
+        return []
+    
+    # Convert polar to Cartesian
+    points_xy = []
+    for angle, distance in point_buffer:
+        x, y = polar_to_cartesian(angle, distance)
+        points_xy.append((x, y))
+    
+    # Simple clustering by distance
+    clusters = []
+    visited = [False] * len(points_xy)
+    
+    for i, (x1, y1) in enumerate(points_xy):
+        if visited[i]:
+            continue
+        
+        # Start new cluster
+        cluster = [(x1, y1)]
+        visited[i] = True
+        
+        # Find nearby points
+        for j, (x2, y2) in enumerate(points_xy):
+            if visited[j]:
+                continue
+            
+            # Check distance to any point in current cluster
+            for cx, cy in cluster:
+                dist = math.sqrt((x2 - cx)**2 + (y2 - cy)**2)
+                if dist < CLUSTER_DISTANCE_THRESHOLD:
+                    cluster.append((x2, y2))
+                    visited[j] = True
+                    break
+        
+        # Only keep clusters of reasonable size
+        if MIN_CLUSTER_SIZE <= len(cluster) <= MAX_CLUSTER_SIZE:
+            clusters.append(cluster)
+    
+    # Calculate object properties
+    objects = []
+    for cluster in clusters:
+        xs = [x for x, y in cluster]
+        ys = [y for x, y in cluster]
+        
+        center_x = sum(xs) / len(xs)
+        center_y = sum(ys) / len(ys)
+        
+        # Calculate bounding circle
+        max_radius = 0
+        for x, y in cluster:
+            radius = math.sqrt((x - center_x)**2 + (y - center_y)**2)
+            max_radius = max(max_radius, radius)
+        
+        distance_from_robot = math.sqrt(center_x**2 + center_y**2)
+        angle_from_robot = math.degrees(math.atan2(center_x, center_y))
+        
+        objects.append({
+            'center': (center_x, center_y),
+            'radius': max_radius,
+            'points': len(cluster),
+            'distance': distance_from_robot,
+            'angle': angle_from_robot
+        })
+    
+    return objects
+
+# ----------------------------
+# Matplotlib setup
+# ----------------------------
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
+
+# Left: XY view with objects
+ax1.set_xlim(-MAX_DISTANCE, MAX_DISTANCE)
+ax1.set_ylim(-MAX_DISTANCE, MAX_DISTANCE)
+ax1.set_aspect('equal')
+ax1.grid(True, alpha=0.3)
+ax1.set_xlabel('X (meters)')
+ax1.set_ylabel('Y (meters)')
+ax1.set_title('Object Detection - XY View')
+
+# Draw robot at center
+robot_circle = Circle((0, 0), 0.15, color='red', fill=True, alpha=0.5)
+ax1.add_patch(robot_circle)
+ax1.arrow(0, 0, 0, 0.3, head_width=0.1, head_length=0.1, fc='red', ec='red')
+
+scatter = ax1.scatter([], [], c='blue', s=5, alpha=0.4, label='LiDAR points')
+object_circles = []
+
+# Right: Object list
+ax2.axis('off')
+ax2.set_xlim(0, 1)
+ax2.set_ylim(0, 1)
+object_text = ax2.text(0.05, 0.95, '', verticalalignment='top', fontfamily='monospace', fontsize=10)
+
+# ----------------------------
+# Animation update function
+# ----------------------------
+def update(frame):
+    read_lidar_data(ser)
+    
+    # Clear previous object circles
+    for circle in object_circles:
+        circle.remove()
+    object_circles.clear()
+    
+    if len(point_buffer) > 0:
+        # Plot all points
+        x_coords = []
+        y_coords = []
+        
+        for angle_deg, distance in point_buffer:
+            x, y = polar_to_cartesian(angle_deg, distance)
+            x_coords.append(x)
+            y_coords.append(y)
+        
+        scatter.set_offsets(np.c_[x_coords, y_coords])
+        
+        # Detect objects
+        objects = detect_objects()
+        
+        # Draw object circles
+        for obj in objects:
+            cx, cy = obj['center']
+            radius = obj['radius']
+            circle = Circle((cx, cy), radius, color='red', fill=False, linewidth=2, linestyle='--')
+            ax1.add_patch(circle)
+            object_circles.append(circle)
+            
+            # Add label
+            label = f"Obj"
+            text = ax1.text(cx, cy, label, color='red', fontsize=8, 
+                          ha='center', va='center', fontweight='bold')
+            object_circles.append(text)
+        
+        # Update object list
+        if objects:
+            info_lines = [
+                "DETECTED OBJECTS",
+                "=" * 50,
+                f"Total: {len(objects)} objects",
+                "",
+            ]
+            
+            for i, obj in enumerate(sorted(objects, key=lambda o: o['distance']), 1):
+                info_lines.append(
+                    f"Object {i}:\n"
+                    f"  Position: ({obj['center'][0]:.2f}, {obj['center'][1]:.2f}) m\n"
+                    f"  Distance: {obj['distance']:.2f} m\n"
+                    f"  Angle:    {obj['angle']:.1f}°\n"
+                    f"  Size:     {obj['radius']*2:.2f} m diameter\n"
+                    f"  Points:   {obj['points']}\n"
+                )
+            
+            object_text.set_text('\n'.join(info_lines))
+        else:
+            object_text.set_text("DETECTED OBJECTS\n" + "="*50 + "\nNo objects detected")
+    
+    return scatter, object_text
+
+# ----------------------------
+# Main
+# ----------------------------
+if __name__ == "__main__":
+    try:
+        ser = serial.Serial(PORT, BAUDRATE, timeout=1)
+        print(f"Connected to LiDAR on {PORT}")
+        print("Object detection running... Close window to stop.")
+        print(f"\nDetection parameters:")
+        print(f"  Cluster distance threshold: {CLUSTER_DISTANCE_THRESHOLD}m")
+        print(f"  Min cluster size: {MIN_CLUSTER_SIZE} points")
+        print(f"  Max cluster size: {MAX_CLUSTER_SIZE} points")
+        print()
+        
+        ani = FuncAnimation(fig, update, interval=100, blit=False, cache_frame_data=False)
+        plt.tight_layout()
+        plt.show()
+        
+    except KeyboardInterrupt:
+        print("\nStopping...")
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        if 'ser' in locals():
+            ser.close()
+        print("LiDAR disconnected")
