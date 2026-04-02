@@ -6,6 +6,7 @@ from matplotlib.patches import Circle
 from collections import deque
 import math
 import time
+import threading
 # ----------------------------
 # Configuration
 # ----------------------------
@@ -38,10 +39,20 @@ USE_FULL_SCAN = True  # Process full 360° instead of just front cone
 #    / Robot
 
 # Store recent points
-point_buffer = deque(maxlen=MAX_POINTS)
+point_buffer = deque(maxlen=MAX_POINTS)  # Thread-safe deque
 # Note: Timestamp filtering removed from this visualization script
 # because it processes buffered data at 30ms intervals. All points
 # in the buffer are recent enough for display and detection.
+
+# Thread control
+stop_reading = False  # Signal to stop background thread
+
+# Object tracking
+tracked_objects = {}  # {object_id: {'center', 'radius', 'points', 'distance', 'angle', 'age', 'last_seen'}}
+next_object_id = 1
+OBJECT_MATCH_THRESHOLD = 30  # cm - max distance to match objects between frames
+MAX_OBJECT_AGE = 5  # frames - remove objects not seen for this many frames
+RECLUSTER_INTERVAL = 10  # frames - full re-cluster every N frames to avoid drift
 
 # ----------------------------
 # Parse LiDAR packet (X3 protocol)
@@ -82,41 +93,53 @@ def parse_packet(packet_bytes):
     return start_angle, points
 
 # ----------------------------
+# Background LiDAR Reader Thread
 # ----------------------------
-# Read LiDAR data
-# ----------------------------
-def read_lidar_data(ser):
-    packets_read = 0
-    current_time = time.time()
+def lidar_reader_thread(ser):
+    """
+    Background thread that continuously reads LiDAR data.
+    Runs independently from animation loop for smooth visualization.
+    """
+    global stop_reading
     
-    while packets_read < PACKETS_PER_UPDATE:  # Read multiple packets for faster updates
-        byte = ser.read(1)
-        if not byte:
-            continue
+    print("[Thread] LiDAR reader started")
+    
+    while not stop_reading:
+        try:
+            current_time = time.time()
+            
+            byte = ser.read(1)
+            if not byte:
+                continue
+            
+            if byte[0] == 0xAA:
+                second_byte = ser.read(1)
+                if not second_byte or second_byte[0] != 0x55:
+                    continue
+                
+                header = ser.read(8)
+                if len(header) != 8:
+                    continue
+                
+                lsn = header[1]
+                data_bytes = lsn * 3
+                data = ser.read(data_bytes)
+                if len(data) != data_bytes:
+                    continue
+                
+                full_packet = bytearray([0xAA, 0x55]) + header + data
+                start_angle, points = parse_packet(full_packet)
+                
+                if start_angle is not None:
+                    for angle, distance, quality in points:
+                        point_buffer.append((angle, distance, current_time))
         
-        if byte[0] == 0xAA:
-            second_byte = ser.read(1)
-            if not second_byte or second_byte[0] != 0x55:
-                continue
-            
-            header = ser.read(8)
-            if len(header) != 8:
-                continue
-            
-            lsn = header[1]
-            data_bytes = lsn * 3
-            data = ser.read(data_bytes)
-            if len(data) != data_bytes:
-                continue
-            
-            full_packet = bytearray([0xAA, 0x55]) + header + data
-            start_angle, points = parse_packet(full_packet)
-            
-            if start_angle is not None:
-                for angle, distance, quality in points:
-                    point_buffer.append((angle, distance, current_time))
-            
-            packets_read += 1
+        except Exception as e:
+            if not stop_reading:  # Don't print errors during shutdown
+                print(f"[Thread] Error reading LiDAR: {e}")
+            time.sleep(0.01)
+    
+    print("[Thread] LiDAR reader stopped")
 
 # ----------------------------
 # DBSCAN Clustering Algorithm
@@ -184,6 +207,85 @@ def dbscan_clustering(points_xy, eps=DBSCAN_EPS, min_samples=DBSCAN_MIN_SAMPLES)
     return labels
 
 # ----------------------------
+# Object Tracking Functions
+# ----------------------------
+def match_objects(new_objects, tracked_objects, threshold=OBJECT_MATCH_THRESHOLD):
+    """
+    Match newly detected objects to existing tracked objects using nearest neighbor.
+    
+    Returns:
+        matches: dict {new_idx: object_id}
+        unmatched_new: list of indices of new objects that didn't match
+    """
+    matches = {}
+    unmatched_new = list(range(len(new_objects)))
+    
+    if not tracked_objects or not new_objects:
+        return matches, unmatched_new
+    
+    # For each tracked object, find closest new detection
+    for obj_id, tracked_obj in tracked_objects.items():
+        if not new_objects:
+            break
+            
+        tracked_center = tracked_obj['center']
+        
+        # Find closest new object
+        min_dist = float('inf')
+        closest_idx = None
+        
+        for i in unmatched_new:
+            new_center = new_objects[i]['center']
+            dist = math.sqrt((new_center[0] - tracked_center[0])**2 + 
+                           (new_center[1] - tracked_center[1])**2)
+            
+            if dist < min_dist and dist < threshold:
+                min_dist = dist
+                closest_idx = i
+        
+        # If found a match, assign it
+        if closest_idx is not None:
+            matches[closest_idx] = obj_id
+            unmatched_new.remove(closest_idx)
+    
+    return matches, unmatched_new
+
+def update_tracked_objects(new_objects, frame_number):
+    """
+    Update tracked objects with new detections.
+    Handles matching, adding new objects, and removing stale ones.
+    """
+    global tracked_objects, next_object_id
+    
+    # Match new detections to existing tracked objects
+    matches, unmatched_new = match_objects(new_objects, tracked_objects)
+    
+    # Update matched objects
+    matched_ids = set()
+    for new_idx, obj_id in matches.items():
+        tracked_objects[obj_id] = new_objects[new_idx]
+        tracked_objects[obj_id]['age'] = tracked_objects[obj_id].get('age', 0) + 1
+        tracked_objects[obj_id]['last_seen'] = frame_number
+        tracked_objects[obj_id]['id'] = obj_id  # Keep ID
+        matched_ids.add(obj_id)
+    
+    # Add new unmatched objects
+    for new_idx in unmatched_new:
+        tracked_objects[next_object_id] = new_objects[new_idx]
+        tracked_objects[next_object_id]['age'] = 1
+        tracked_objects[next_object_id]['last_seen'] = frame_number
+        tracked_objects[next_object_id]['id'] = next_object_id
+        next_object_id += 1
+    
+    # Remove stale objects (not seen recently)
+    stale_ids = [obj_id for obj_id, obj in tracked_objects.items() 
+                 if frame_number - obj['last_seen'] > MAX_OBJECT_AGE]
+    for obj_id in stale_ids:
+        del tracked_objects[obj_id]
+    
+    return list(tracked_objects.values())
+
+# ----------------------------
 # Convert polar to Cartesian (in cm) - Robot frame
 # ----------------------------
 def polar_to_cartesian(angle_deg, distance_cm):
@@ -199,17 +301,30 @@ def polar_to_cartesian(angle_deg, distance_cm):
     return x, y
 
 # ----------------------------
-# Cluster points into objects using DBSCAN
+# Cluster points into objects using DBSCAN (with tracking)
 # ----------------------------
+frame_counter = 0
+
 def detect_objects():
-    if len(point_buffer) == 0:
-        return []
+    global frame_counter, tracked_objects
     
-    # Process all points (360° scan)
+    frame_counter += 1
+    
+    if len(point_buffer) == 0:
+        return list(tracked_objects.values())
+    
+    # Only do full DBSCAN clustering periodically or on first frame
+    should_recluster = (frame_counter % RECLUSTER_INTERVAL == 1) or (frame_counter == 1)
+    
+    if not should_recluster:
+        # Just return existing tracked objects (updated positions from previous frame)
+        return list(tracked_objects.values())
+    
+    # Full DBSCAN clustering
     all_points = list(point_buffer)
     
     if len(all_points) == 0:
-        return []
+        return list(tracked_objects.values())
     
     # Convert polar to Cartesian and filter by distance from robot
     points_xy = []
@@ -222,7 +337,7 @@ def detect_objects():
             points_xy.append((x, y))
     
     if len(points_xy) == 0:
-        return []
+        return list(tracked_objects.values())
     
     # Apply DBSCAN clustering
     labels = dbscan_clustering(points_xy, eps=DBSCAN_EPS, min_samples=DBSCAN_MIN_SAMPLES)
@@ -236,8 +351,8 @@ def detect_objects():
             clusters_dict[label] = []
         clusters_dict[label].append(points_xy[i])
     
-    # Filter by size and calculate object properties
-    objects = []
+    # Calculate object properties (new detections)
+    new_objects = []
     for cluster_id, cluster in clusters_dict.items():
         # Filter out too-large clusters (walls/background)
         if len(cluster) > MAX_CLUSTER_SIZE:
@@ -258,7 +373,7 @@ def detect_objects():
         distance_from_robot = math.sqrt(center_x**2 + center_y**2)
         angle_from_robot = math.degrees(math.atan2(center_y, center_x))  # atan2(y, x) for robot frame
         
-        objects.append({
+        new_objects.append({
             'center': (center_x, center_y),
             'radius': max_radius,
             'points': len(cluster),
@@ -266,7 +381,8 @@ def detect_objects():
             'angle': angle_from_robot
         })
     
-    return objects
+    # Update tracked objects with new detections
+    return update_tracked_objects(new_objects, frame_counter)
 
 # ----------------------------
 # Matplotlib setup
@@ -322,7 +438,7 @@ object_text = ax2.text(0.05, 0.95, '', verticalalignment='top', fontfamily='mono
 # Animation update function
 # ----------------------------
 def update(frame):
-    read_lidar_data(ser)
+    # No blocking serial read here - background thread populates buffer
     
     # Clear previous object circles
     for circle in object_circles:
@@ -377,8 +493,9 @@ def update(frame):
             ax1.add_patch(circle)
             object_circles.append(circle)
             
-            # Add detailed label
-            label = f"#{i}\n{dist:.0f}cm"
+            # Add detailed label with persistent ID
+            obj_id = obj.get('id', i)
+            label = f"ID:{obj_id}\n{dist:.0f}cm"
             text = ax1.text(cx, cy, label, color=color, fontsize=9, 
                           ha='center', va='center', fontweight='bold',
                           bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.7))
@@ -398,14 +515,17 @@ def update(frame):
             sorted_objects = sorted(objects, key=lambda o: o['distance'])
             
             info_lines = [
-                "DETECTED OBJECTS (360° SCAN)",
+                "TRACKED OBJECTS (360° SCAN)",
                 "=" * 50,
-                f"Total: {len(objects)} objects\n",
+                f"Total: {len(objects)} objects",
+                f"Frame: {frame_counter} (Re-cluster: {frame_counter % RECLUSTER_INTERVAL == 1})\n",
             ]
             
             for i, obj in enumerate(sorted_objects, 1):
                 dist = obj['distance']
                 angle = obj['angle']
+                obj_id = obj.get('id', '?')
+                age = obj.get('age', 0)
                 
                 # Status indicator (updated for 0-100cm range)
                 if dist < 30:
@@ -436,7 +556,7 @@ def update(frame):
                     direction = "FRONT-RIGHT"
                 
                 info_lines.append(
-                    f"#{i} {status}\n"
+                    f"ID:{obj_id} {status} (age:{age})\n"
                     f"  Dist: {dist:.0f}cm | Angle: {angle:+.1f}°\n"
                     f"  Direction: {direction}\n"
                     f"  Position: X={obj['center'][0]:.0f} Y={obj['center'][1]:.0f}cm\n"
@@ -445,7 +565,7 @@ def update(frame):
             
             object_text.set_text('\n'.join(info_lines))
         else:
-            object_text.set_text("DETECTED OBJECTS (360° SCAN)\n" + "="*50 + "\n\nNo objects detected\n\nClear area ✓")
+            object_text.set_text(f"TRACKED OBJECTS (360° SCAN)\n" + "="*50 + f"\nFrame: {frame_counter}\n\nNo objects detected\n\nClear area ✓")
             warning_text.set_visible(False)
     
     return scatter, object_text, warning_text
@@ -454,6 +574,9 @@ def update(frame):
 # Main
 # ----------------------------
 if __name__ == "__main__":
+    ser = None
+    reader_thread = None
+    
     try:
         ser = serial.Serial(PORT, BAUDRATE, timeout=1)
         print(f"Connected to LiDAR on {PORT}")
@@ -462,17 +585,29 @@ if __name__ == "__main__":
         print(f"  Update rate: ~{1000/UPDATE_INTERVAL:.0f} Hz")
         print(f"  Field of view: 360° (full scan)")
         print(f"  Detection range: 0-{MAX_DETECTION_DISTANCE}cm (ignores far objects)")
-        print(f"  Clustering: DBSCAN")
+        print(f"  Clustering: DBSCAN with object tracking")
         print(f"    - eps (neighborhood): {DBSCAN_EPS}cm")
         print(f"    - min_samples: {DBSCAN_MIN_SAMPLES} points")
         print(f"    - max cluster size: {MAX_CLUSTER_SIZE} points")
+        print(f"  Tracking:")
+        print(f"    - Re-cluster interval: every {RECLUSTER_INTERVAL} frames")
+        print(f"    - Match threshold: {OBJECT_MATCH_THRESHOLD}cm")
+        print(f"    - Max object age: {MAX_OBJECT_AGE} frames")
+        print(f"  Threading: Background LiDAR reader (non-blocking)")
         print()
+        
+        # Start background LiDAR reader thread
+        reader_thread = threading.Thread(target=lidar_reader_thread, args=(ser,), daemon=True)
+        reader_thread.start()
+        
+        # Give thread time to start collecting data
+        time.sleep(0.5)
         
         ani = FuncAnimation(fig, update, interval=UPDATE_INTERVAL, blit=False, cache_frame_data=False)
         plt.tight_layout()
         
         # Add title
-        fig.suptitle(f'LiDAR Object Detection - Full 360° Scan | Detection Range: {MAX_DETECTION_DISTANCE}cm', 
+        fig.suptitle(f'LiDAR Object Detection - Full 360° Scan with Tracking | Re-cluster every {RECLUSTER_INTERVAL} frames', 
                      fontsize=12, fontweight='bold')
         
         plt.show()
@@ -482,6 +617,10 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Error: {e}")
     finally:
-        if 'ser' in locals():
+        # Clean shutdown
+        stop_reading = True
+        if reader_thread and reader_thread.is_alive():
+            reader_thread.join(timeout=2.0)
+        if ser:
             ser.close()
         print("LiDAR disconnected")
