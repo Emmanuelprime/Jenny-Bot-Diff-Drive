@@ -16,10 +16,10 @@ MAX_POINTS = 1000
 # LiDAR angle calibration
 LIDAR_ANGLE_OFFSET = 60  # degrees - offset to align LiDAR front with robot front
 
-# Object detection parameters
-CLUSTER_DISTANCE_THRESHOLD = 15  # cm
-MIN_CLUSTER_SIZE = 3
-MAX_CLUSTER_SIZE = 100
+# Object detection parameters - DBSCAN clustering
+DBSCAN_EPS = 15  # cm - neighborhood distance
+DBSCAN_MIN_SAMPLES = 3  # minimum points for a cluster core
+MAX_CLUSTER_SIZE = 100  # maximum points in a cluster
 DETECTION_RANGE = (10, 300)  # min and max distance in cm
 
 # Field of view (front cone)
@@ -134,6 +134,71 @@ def filter_front_cone(points, center_angle=FRONT_CONE_CENTER, cone_width=FRONT_C
     return filtered
 
 # ----------------------------
+# DBSCAN Clustering Algorithm
+# ----------------------------
+def dbscan_clustering(points_xy, eps=DBSCAN_EPS, min_samples=DBSCAN_MIN_SAMPLES):
+    """
+    DBSCAN: Density-Based Spatial Clustering of Applications with Noise
+    
+    Args:
+        points_xy: List of (x, y) coordinates
+        eps: Maximum distance between two points to be neighbors (cm)
+        min_samples: Minimum points in neighborhood to form a cluster core
+    
+    Returns:
+        labels: Array where labels[i] is cluster ID for point i (-1 = noise)
+    """
+    n = len(points_xy)
+    labels = [-1] * n  # -1 = unvisited/noise
+    cluster_id = 0
+    
+    def get_neighbors(point_idx):
+        """Find all points within eps distance of point_idx"""
+        neighbors = []
+        px, py = points_xy[point_idx]
+        for i, (x, y) in enumerate(points_xy):
+            dist = math.sqrt((x - px)**2 + (y - py)**2)
+            if dist <= eps:
+                neighbors.append(i)
+        return neighbors
+    
+    def expand_cluster(point_idx, neighbors, cluster_id):
+        """Expand cluster from a core point"""
+        labels[point_idx] = cluster_id
+        
+        i = 0
+        while i < len(neighbors):
+            neighbor_idx = neighbors[i]
+            
+            # If unvisited, mark as part of cluster
+            if labels[neighbor_idx] == -1:
+                labels[neighbor_idx] = cluster_id
+                
+                # If this point is also a core point, add its neighbors
+                neighbor_neighbors = get_neighbors(neighbor_idx)
+                if len(neighbor_neighbors) >= min_samples:
+                    neighbors.extend([n for n in neighbor_neighbors if n not in neighbors])
+            
+            i += 1
+    
+    # Main DBSCAN loop
+    for point_idx in range(n):
+        if labels[point_idx] != -1:  # Already processed
+            continue
+        
+        neighbors = get_neighbors(point_idx)
+        
+        if len(neighbors) < min_samples:
+            # Not enough neighbors - mark as noise (stays -1)
+            continue
+        
+        # Start new cluster from this core point
+        expand_cluster(point_idx, neighbors, cluster_id)
+        cluster_id += 1
+    
+    return labels
+
+# ----------------------------
 # Convert polar to Cartesian (in cm) - Robot frame
 # ----------------------------
 def polar_to_cartesian(angle_deg, distance_cm):
@@ -149,7 +214,7 @@ def polar_to_cartesian(angle_deg, distance_cm):
     return x, y
 
 # ----------------------------
-# Detect objects
+# Detect objects using DBSCAN
 # ----------------------------
 def detect_objects(point_buffer):
     if len(point_buffer) == 0:
@@ -166,36 +231,29 @@ def detect_objects(point_buffer):
     # Convert to Cartesian
     points_xy = [polar_to_cartesian(angle, dist) for angle, dist in front_points]
     
-    # Clustering
-    clusters = []
-    visited = [False] * len(points_xy)
+    # Apply DBSCAN clustering
+    labels = dbscan_clustering(points_xy, eps=DBSCAN_EPS, min_samples=DBSCAN_MIN_SAMPLES)
     
-    for i, (x1, y1) in enumerate(points_xy):
-        if visited[i]:
+    # Group points by cluster
+    clusters_dict = {}
+    noise_count = 0
+    for i, label in enumerate(labels):
+        if label == -1:  # Noise points
+            noise_count += 1
+            continue
+        if label not in clusters_dict:
+            clusters_dict[label] = []
+        clusters_dict[label].append(points_xy[i])
+    
+    # Filter by size and calculate object properties
+    objects = []
+    rejected_count = 0
+    for cluster_id, cluster in clusters_dict.items():
+        # Filter out too-large clusters (walls/background)
+        if len(cluster) > MAX_CLUSTER_SIZE:
+            rejected_count += len(cluster)
             continue
         
-        cluster = [(x1, y1)]
-        visited[i] = True
-        
-        for j, (x2, y2) in enumerate(points_xy):
-            if visited[j]:
-                continue
-            
-            for cx, cy in cluster:
-                dist = math.sqrt((x2 - cx)**2 + (y2 - cy)**2)
-                if dist < CLUSTER_DISTANCE_THRESHOLD:
-                    cluster.append((x2, y2))
-                    visited[j] = True
-                    break
-        
-        if MIN_CLUSTER_SIZE <= len(cluster) <= MAX_CLUSTER_SIZE:
-            clusters.append(cluster)
-    
-    print(f"  Found {len(clusters)} valid clusters (rejected {sum(1 for i in range(len(visited)) if visited[i]) - sum(len(c) for c in clusters)} points)")
-    
-    # Calculate object properties
-    objects = []
-    for cluster in clusters:
         xs = [x for x, y in cluster]
         ys = [y for x, y in cluster]
         
@@ -216,6 +274,8 @@ def detect_objects(point_buffer):
             'distance': distance_from_robot,
             'angle': angle_from_robot
         })
+    
+    print(f"  DBSCAN: {len(clusters_dict)} clusters, {noise_count} noise points, {rejected_count} rejected (too large)")
     
     return sorted(objects, key=lambda o: o['distance'])
 
@@ -249,8 +309,10 @@ def main():
     print(f"Object Detection Parameters:")
     print(f"  Field of view: {FRONT_CONE_ANGLE}° (center at {FRONT_CONE_CENTER}°)")
     print(f"  Detection range: {DETECTION_RANGE[0]}-{DETECTION_RANGE[1]}cm")
-    print(f"  Cluster threshold: {CLUSTER_DISTANCE_THRESHOLD}cm")
-    print(f"  Min/Max points: {MIN_CLUSTER_SIZE}/{MAX_CLUSTER_SIZE}")
+    print(f"  Clustering: DBSCAN")
+    print(f"    - eps (neighborhood): {DBSCAN_EPS}cm")
+    print(f"    - min_samples: {DBSCAN_MIN_SAMPLES} points")
+    print(f"    - max cluster size: {MAX_CLUSTER_SIZE} points")
     print("\n" + "="*70)
     print()
     
