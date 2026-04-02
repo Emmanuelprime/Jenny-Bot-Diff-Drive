@@ -17,6 +17,7 @@ MAX_POINTS = 1000
 LIDAR_ANGLE_OFFSET = 60  # degrees - offset to align LiDAR front with robot front
 
 # Object detection parameters - DBSCAN clustering
+MAX_DETECTION_DISTANCE = 100  # cm - only process objects within this range (saves CPU)
 DBSCAN_EPS = 15  # cm - neighborhood distance
 DBSCAN_MIN_SAMPLES = 3  # minimum points for a cluster core
 MAX_CLUSTER_SIZE = 100  # maximum points in a cluster
@@ -228,8 +229,20 @@ def detect_objects(point_buffer):
     if len(front_points) == 0:
         return []
     
-    # Convert to Cartesian
-    points_xy = [polar_to_cartesian(angle, dist) for angle, dist in front_points]
+    # Convert to Cartesian and filter by distance from robot
+    points_xy = []
+    for angle, dist in front_points:
+        x, y = polar_to_cartesian(angle, dist)
+        # Calculate distance from robot (origin)
+        dist_from_robot = math.sqrt(x**2 + y**2)
+        # Only process objects within detection range
+        if dist_from_robot <= MAX_DETECTION_DISTANCE:
+            points_xy.append((x, y))
+    
+    print(f"  After distance filter (<={MAX_DETECTION_DISTANCE}cm): {len(points_xy)} points")
+    
+    if len(points_xy) == 0:
+        return []
     
     # Apply DBSCAN clustering
     labels = dbscan_clustering(points_xy, eps=DBSCAN_EPS, min_samples=DBSCAN_MIN_SAMPLES)
@@ -308,7 +321,8 @@ def main():
     print(f"Connected to LiDAR on {PORT}\n")
     print(f"Object Detection Parameters:")
     print(f"  Field of view: {FRONT_CONE_ANGLE}° (center at {FRONT_CONE_CENTER}°)")
-    print(f"  Detection range: {DETECTION_RANGE[0]}-{DETECTION_RANGE[1]}cm")
+    print(f"  LiDAR range: {DETECTION_RANGE[0]}-{DETECTION_RANGE[1]}cm")
+    print(f"  Detection range: 0-{MAX_DETECTION_DISTANCE}cm (optimization - ignores far objects)")
     print(f"  Clustering: DBSCAN")
     print(f"    - eps (neighborhood): {DBSCAN_EPS}cm")
     print(f"    - min_samples: {DBSCAN_MIN_SAMPLES} points")

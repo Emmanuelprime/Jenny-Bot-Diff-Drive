@@ -21,6 +21,7 @@ PACKETS_PER_UPDATE = 5  # Read more packets per frame
 LIDAR_ANGLE_OFFSET = 60  # degrees - offset to align LiDAR front with robot front
 
 # Object detection parameters - DBSCAN clustering
+MAX_DETECTION_DISTANCE = 100  # cm - only process objects within this range (saves CPU)
 DBSCAN_EPS = 15  # cm - neighborhood distance (similar to old threshold)
 DBSCAN_MIN_SAMPLES = 3  # minimum points for a cluster core
 MAX_CLUSTER_SIZE = 100  # maximum points in a cluster (filter out walls)
@@ -230,11 +231,18 @@ def detect_objects():
     if len(front_points) == 0:
         return []
     
-    # Convert polar to Cartesian
+    # Convert polar to Cartesian and filter by distance from robot
     points_xy = []
     for angle, distance in front_points:
         x, y = polar_to_cartesian(angle, distance)
-        points_xy.append((x, y))
+        # Calculate distance from robot (origin)
+        dist_from_robot = math.sqrt(x**2 + y**2)
+        # Only process objects within detection range
+        if dist_from_robot <= MAX_DETECTION_DISTANCE:
+            points_xy.append((x, y))
+    
+    if len(points_xy) == 0:
+        return []
     
     # Apply DBSCAN clustering
     labels = dbscan_clustering(points_xy, eps=DBSCAN_EPS, min_samples=DBSCAN_MIN_SAMPLES)
@@ -305,10 +313,10 @@ ax1.text(35, 0, 'FRONT', fontsize=8, color='red', fontweight='bold')
 # Add legend for distance colors
 from matplotlib.lines import Line2D
 legend_elements = [
-    Line2D([0], [0], marker='o', color='w', markerfacecolor='red', markersize=10, label='<50cm (Very Close)'),
-    Line2D([0], [0], marker='o', color='w', markerfacecolor='orange', markersize=10, label='50-100cm (Close)'),
-    Line2D([0], [0], marker='o', color='w', markerfacecolor='yellow', markersize=10, label='100-150cm (Medium)'),
-    Line2D([0], [0], marker='o', color='w', markerfacecolor='green', markersize=10, label='>150cm (Far)'),
+    Line2D([0], [0], marker='o', color='w', markerfacecolor='red', markersize=10, label='<30cm (Very Close)'),
+    Line2D([0], [0], marker='o', color='w', markerfacecolor='orange', markersize=10, label='30-60cm (Close)'),
+    Line2D([0], [0], marker='o', color='w', markerfacecolor='yellow', markersize=10, label='60-100cm (Medium)'),
+    Line2D([0], [0], color='orange', linestyle='--', linewidth=2, label=f'{MAX_DETECTION_DISTANCE}cm Detection Limit'),
 ]
 ax1.legend(handles=legend_elements, loc='upper left', fontsize=8)
 
@@ -320,6 +328,12 @@ theta2 = FRONT_CONE_ANGLE/2   # +30°
 wedge = mpatches.Wedge((0, 0), MAX_DISTANCE, theta1, theta2, 
                        alpha=0.1, color='yellow', label='Detection Zone')
 ax1.add_patch(wedge)
+
+# Draw detection range circle (100cm limit)
+detection_circle = Circle((0, 0), MAX_DETECTION_DISTANCE, color='orange', 
+                         fill=False, linewidth=2, linestyle='--', alpha=0.5, 
+                         label=f'{MAX_DETECTION_DISTANCE}cm Range')
+ax1.add_patch(detection_circle)
 
 scatter = ax1.scatter([], [], c='blue', s=5, alpha=0.4, label='LiDAR points')
 object_circles = []
@@ -369,19 +383,21 @@ def update(frame):
             radius = obj['radius']
             dist = obj['distance']
             
-            # Color code by distance: red (close) -> yellow (medium) -> green (far)
-            if dist < 50:
+            # Color code by distance (optimized for 0-100cm range):
+            if dist < 30:
                 color = 'red'
                 linewidth = 3
                 close_objects.append(obj)
-            elif dist < 100:
+            elif dist < 60:
                 color = 'orange'
                 linewidth = 2.5
                 close_objects.append(obj)
-            elif dist < 150:
+            elif dist < 100:
                 color = 'yellow'
                 linewidth = 2
+                close_objects.append(obj)
             else:
+                # This shouldn't happen with MAX_DETECTION_DISTANCE filter
                 color = 'green'
                 linewidth = 1.5
             
@@ -397,10 +413,10 @@ def update(frame):
                           bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.7))
             object_circles.append(text)
         
-        # Update warning text
+        # Update warning text for close objects (<60cm)
         if close_objects:
             closest = min(close_objects, key=lambda o: o['distance'])
-            warning_text.set_text(f"⚠️ {len(close_objects)} OBSTACLE(S) <100cm | CLOSEST: {closest['distance']:.0f}cm")
+            warning_text.set_text(f"⚠️ {len(close_objects)} OBSTACLE(S) <60cm | CLOSEST: {closest['distance']:.0f}cm")
             warning_text.set_visible(True)
         else:
             warning_text.set_visible(False)
@@ -420,15 +436,15 @@ def update(frame):
                 dist = obj['distance']
                 angle = obj['angle']
                 
-                # Status indicator
-                if dist < 50:
+                # Status indicator (updated for 0-100cm range)
+                if dist < 30:
                     status = "🔴 VERY CLOSE"
-                elif dist < 100:
+                elif dist < 60:
                     status = "🟠 CLOSE"
-                elif dist < 150:
+                elif dist < 100:
                     status = "🟡 MEDIUM"
                 else:
-                    status = "🟢 FAR"
+                    status = "🟢 FAR"  # Shouldn't happen with filter
                 
                 # Direction
                 if -15 <= angle <= 15:
@@ -468,6 +484,7 @@ if __name__ == "__main__":
         print(f"\nDetection parameters:")
         print(f"  Update rate: ~{1000/UPDATE_INTERVAL:.0f} Hz")
         print(f"  Field of view: {FRONT_CONE_ANGLE}° (front cone)")
+        print(f"  Detection range: 0-{MAX_DETECTION_DISTANCE}cm (ignores far objects)")
         print(f"  Clustering: DBSCAN")
         print(f"    - eps (neighborhood): {DBSCAN_EPS}cm")
         print(f"    - min_samples: {DBSCAN_MIN_SAMPLES} points")
