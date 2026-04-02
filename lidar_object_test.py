@@ -23,9 +23,8 @@ DBSCAN_MIN_SAMPLES = 4  # minimum points for a cluster core (increased to filter
 MAX_CLUSTER_SIZE = 100  # maximum points in a cluster
 DETECTION_RANGE = (10, 300)  # min and max distance in cm
 
-# Field of view (front cone)
-FRONT_CONE_ANGLE = 60  # degrees - only process points in this cone (0° = forward)
-FRONT_CONE_CENTER = 0  # degrees - center of the cone
+# Field of view - FULL 360° SCAN
+USE_FULL_SCAN = True  # Process full 360° instead of just front cone
 
 # Robot coordinate system:
 #     +Y (90°, Left)
@@ -221,17 +220,17 @@ def detect_objects(point_buffer):
     if len(point_buffer) == 0:
         return []
     
-    # Filter to front cone only
-    front_points = filter_front_cone(point_buffer)
+    # Process all points (360° scan)
+    all_points = [(angle, dist, ts) for angle, dist, ts in point_buffer]
     
-    print(f"  After front cone filter: {len(front_points)} points (from {len(point_buffer)} total)")
+    print(f"  Processing {len(all_points)} points from full 360° scan")
     
-    if len(front_points) == 0:
+    if len(all_points) == 0:
         return []
     
     # Convert to Cartesian and filter by distance from robot
     points_xy = []
-    for angle, dist in front_points:
+    for angle, dist, timestamp in all_points:
         x, y = polar_to_cartesian(angle, dist)
         # Calculate distance from robot (origin)
         dist_from_robot = math.sqrt(x**2 + y**2)
@@ -320,7 +319,7 @@ def main():
     ser = serial.Serial(PORT, BAUDRATE, timeout=1)
     print(f"Connected to LiDAR on {PORT}\n")
     print(f"Object Detection Parameters:")
-    print(f"  Field of view: {FRONT_CONE_ANGLE}° (center at {FRONT_CONE_CENTER}°)")
+    print(f"  Field of view: 360° (full scan)")
     print(f"  LiDAR range: {DETECTION_RANGE[0]}-{DETECTION_RANGE[1]}cm")
     print(f"  Detection range: 0-{MAX_DETECTION_DISTANCE}cm (optimization - ignores far objects)")
     print(f"  Clustering: DBSCAN")

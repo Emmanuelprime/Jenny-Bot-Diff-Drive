@@ -26,9 +26,8 @@ DBSCAN_EPS = 25  # cm - neighborhood distance (increased to merge object fragmen
 DBSCAN_MIN_SAMPLES = 4  # minimum points for a cluster core (increased to filter noise)
 MAX_CLUSTER_SIZE = 100  # maximum points in a cluster (filter out walls)
 
-# Field of view (front cone)
-FRONT_CONE_ANGLE = 60  # degrees - only process points in this cone (0° = forward)
-FRONT_CONE_CENTER = 0  # degrees - center of the cone
+# Field of view - FULL 360° SCAN
+USE_FULL_SCAN = True  # Process full 360° instead of just front cone
 
 # Robot coordinate system:
 #     +Y (90°, Left)
@@ -225,15 +224,15 @@ def detect_objects():
     if len(point_buffer) == 0:
         return []
     
-    # Filter to front cone only
-    front_points = filter_front_cone(list(point_buffer))
+    # Process all points (360° scan)
+    all_points = list(point_buffer)
     
-    if len(front_points) == 0:
+    if len(all_points) == 0:
         return []
     
     # Convert polar to Cartesian and filter by distance from robot
     points_xy = []
-    for angle, distance in front_points:
+    for angle, distance, timestamp in all_points:
         x, y = polar_to_cartesian(angle, distance)
         # Calculate distance from robot (origin)
         dist_from_robot = math.sqrt(x**2 + y**2)
@@ -300,7 +299,7 @@ ax1.set_aspect('equal')
 ax1.grid(True, alpha=0.3)
 ax1.set_xlabel('X (cm) - Front/Back')
 ax1.set_ylabel('Y (cm) - Left/Right')
-ax1.set_title('Object Detection - Robot Frame (Front=+X, Left=+Y)')
+ax1.set_title('Object Detection - Full 360° Scan (Front=+X, Left=+Y)')
 
 # Draw robot at center (15cm radius)
 robot_circle = Circle((0, 0), 15, color='red', fill=True, alpha=0.5)
@@ -320,16 +319,7 @@ legend_elements = [
 ]
 ax1.legend(handles=legend_elements, loc='upper left', fontsize=8)
 
-# Draw field of view cone
-import matplotlib.patches as mpatches
-# Cone centered at 0° (+X axis), spanning ±30°
-theta1 = -FRONT_CONE_ANGLE/2  # -30°
-theta2 = FRONT_CONE_ANGLE/2   # +30°
-wedge = mpatches.Wedge((0, 0), MAX_DISTANCE, theta1, theta2, 
-                       alpha=0.1, color='yellow', label='Detection Zone')
-ax1.add_patch(wedge)
-
-# Draw detection range circle (100cm limit)
+# Draw detection range circle (100cm limit for obstacle processing)
 detection_circle = Circle((0, 0), MAX_DETECTION_DISTANCE, color='orange', 
                          fill=False, linewidth=2, linestyle='--', alpha=0.5, 
                          label=f'{MAX_DETECTION_DISTANCE}cm Range')
@@ -359,21 +349,21 @@ def update(frame):
     object_circles.clear()
     
     if len(point_buffer) > 0:
-        # Filter to front cone for both display and detection
-        front_points = filter_front_cone(list(point_buffer))
+        # Plot all points from 360° scan
+        all_points = list(point_buffer)
         
-        # Plot only front cone points
+        # Convert all points to Cartesian for display
         x_coords = []
         y_coords = []
         
-        for angle_deg, distance in front_points:
+        for angle_deg, distance, timestamp in all_points:
             x, y = polar_to_cartesian(angle_deg, distance)
             x_coords.append(x)
             y_coords.append(y)
         
         scatter.set_offsets(np.c_[x_coords, y_coords])
         
-        # Detect objects (uses same filtered points internally)
+        # Detect objects (filters by distance internally)
         objects = detect_objects()
         
         # Draw object circles with distance-based coloring
@@ -427,7 +417,7 @@ def update(frame):
             sorted_objects = sorted(objects, key=lambda o: o['distance'])
             
             info_lines = [
-                "DETECTED OBJECTS IN FRONT",
+                "DETECTED OBJECTS (360° SCAN)",
                 "=" * 50,
                 f"Total: {len(objects)} objects\n",
             ]
@@ -446,17 +436,23 @@ def update(frame):
                 else:
                     status = "🟢 FAR"  # Shouldn't happen with filter
                 
-                # Direction
+                # Direction (for 360° coverage)
                 if -15 <= angle <= 15:
-                    direction = "STRAIGHT AHEAD"
-                elif 15 < angle <= 45:
+                    direction = "FRONT"
+                elif 15 < angle <= 75:
                     direction = "FRONT-LEFT"
-                elif -45 <= angle < -15:
-                    direction = "FRONT-RIGHT"
-                elif angle > 45:
+                elif 75 < angle <= 105:
                     direction = "LEFT"
-                else:
+                elif 105 < angle <= 165:
+                    direction = "REAR-LEFT"
+                elif 165 < angle or angle < -165:
+                    direction = "REAR"
+                elif -165 <= angle < -105:
+                    direction = "REAR-RIGHT"
+                elif -105 <= angle < -75:
                     direction = "RIGHT"
+                else:  # -75 to -15
+                    direction = "FRONT-RIGHT"
                 
                 info_lines.append(
                     f"#{i} {status}\n"
@@ -468,7 +464,7 @@ def update(frame):
             
             object_text.set_text('\n'.join(info_lines))
         else:
-            object_text.set_text("DETECTED OBJECTS IN FRONT\n" + "="*50 + "\n\nNo objects detected\n\nClear path ahead ✓")
+            object_text.set_text("DETECTED OBJECTS (360° SCAN)\n" + "="*50 + "\n\nNo objects detected\n\nClear area ✓")
             warning_text.set_visible(False)
     
     return scatter, object_text, warning_text
@@ -483,7 +479,7 @@ if __name__ == "__main__":
         print("Object detection running... Close window to stop.")
         print(f"\nDetection parameters:")
         print(f"  Update rate: ~{1000/UPDATE_INTERVAL:.0f} Hz")
-        print(f"  Field of view: {FRONT_CONE_ANGLE}° (front cone)")
+        print(f"  Field of view: 360° (full scan)")
         print(f"  Detection range: 0-{MAX_DETECTION_DISTANCE}cm (ignores far objects)")
         print(f"  Clustering: DBSCAN")
         print(f"    - eps (neighborhood): {DBSCAN_EPS}cm")
@@ -495,7 +491,7 @@ if __name__ == "__main__":
         plt.tight_layout()
         
         # Add title
-        fig.suptitle(f'LiDAR Object Detection - Front {FRONT_CONE_ANGLE}° Cone | +60° Angle Offset Applied', 
+        fig.suptitle(f'LiDAR Object Detection - Full 360° Scan | Detection Range: {MAX_DETECTION_DISTANCE}cm', 
                      fontsize=12, fontweight='bold')
         
         plt.show()
