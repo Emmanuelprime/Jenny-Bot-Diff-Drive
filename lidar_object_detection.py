@@ -253,6 +253,16 @@ ax1.arrow(0, 0, 30, 0, head_width=10, head_length=10, fc='red', ec='red')
 # Label for orientation
 ax1.text(35, 0, 'FRONT', fontsize=8, color='red', fontweight='bold')
 
+# Add legend for distance colors
+from matplotlib.lines import Line2D
+legend_elements = [
+    Line2D([0], [0], marker='o', color='w', markerfacecolor='red', markersize=10, label='<50cm (Very Close)'),
+    Line2D([0], [0], marker='o', color='w', markerfacecolor='orange', markersize=10, label='50-100cm (Close)'),
+    Line2D([0], [0], marker='o', color='w', markerfacecolor='yellow', markersize=10, label='100-150cm (Medium)'),
+    Line2D([0], [0], marker='o', color='w', markerfacecolor='green', markersize=10, label='>150cm (Far)'),
+]
+ax1.legend(handles=legend_elements, loc='upper left', fontsize=8)
+
 # Draw field of view cone
 import matplotlib.patches as mpatches
 # Cone centered at 0° (+X axis), spanning ±30°
@@ -264,6 +274,9 @@ ax1.add_patch(wedge)
 
 scatter = ax1.scatter([], [], c='blue', s=5, alpha=0.4, label='LiDAR points')
 object_circles = []
+warning_text = ax1.text(0, MAX_DISTANCE * 0.9, '', fontsize=12, color='red', 
+                       fontweight='bold', ha='center', 
+                       bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.8))
 
 # Right: Object list
 ax2.axis('off')
@@ -300,45 +313,100 @@ def update(frame):
         # Detect objects (uses same filtered points internally)
         objects = detect_objects()
         
-        # Draw object circles
-        for obj in objects:
+        # Draw object circles with distance-based coloring
+        close_objects = []
+        for i, obj in enumerate(objects, 1):
             cx, cy = obj['center']
             radius = obj['radius']
-            circle = Circle((cx, cy), radius, color='red', fill=False, linewidth=2, linestyle='--')
+            dist = obj['distance']
+            
+            # Color code by distance: red (close) -> yellow (medium) -> green (far)
+            if dist < 50:
+                color = 'red'
+                linewidth = 3
+                close_objects.append(obj)
+            elif dist < 100:
+                color = 'orange'
+                linewidth = 2.5
+                close_objects.append(obj)
+            elif dist < 150:
+                color = 'yellow'
+                linewidth = 2
+            else:
+                color = 'green'
+                linewidth = 1.5
+            
+            # Draw object circle
+            circle = Circle((cx, cy), radius, color=color, fill=False, linewidth=linewidth, linestyle='-')
             ax1.add_patch(circle)
             object_circles.append(circle)
             
-            # Add label
-            label = f"Obj"
-            text = ax1.text(cx, cy, label, color='red', fontsize=8, 
-                          ha='center', va='center', fontweight='bold')
+            # Add detailed label
+            label = f"#{i}\n{dist:.0f}cm"
+            text = ax1.text(cx, cy, label, color=color, fontsize=9, 
+                          ha='center', va='center', fontweight='bold',
+                          bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.7))
             object_circles.append(text)
+        
+        # Update warning text
+        if close_objects:
+            closest = min(close_objects, key=lambda o: o['distance'])
+            warning_text.set_text(f"⚠️ {len(close_objects)} OBSTACLE(S) <100cm | CLOSEST: {closest['distance']:.0f}cm")
+            warning_text.set_visible(True)
+        else:
+            warning_text.set_visible(False)
         
         # Update object list
         if objects:
+            # Sort by distance
+            sorted_objects = sorted(objects, key=lambda o: o['distance'])
+            
             info_lines = [
-                "DETECTED OBJECTS",
+                "DETECTED OBJECTS IN FRONT",
                 "=" * 50,
-                f"Total: {len(objects)} objects",
-                "",
+                f"Total: {len(objects)} objects\n",
             ]
             
-            for i, obj in enumerate(sorted(objects, key=lambda o: o['distance']), 1):
+            for i, obj in enumerate(sorted_objects, 1):
+                dist = obj['distance']
+                angle = obj['angle']
+                
+                # Status indicator
+                if dist < 50:
+                    status = "🔴 VERY CLOSE"
+                elif dist < 100:
+                    status = "🟠 CLOSE"
+                elif dist < 150:
+                    status = "🟡 MEDIUM"
+                else:
+                    status = "🟢 FAR"
+                
+                # Direction
+                if -15 <= angle <= 15:
+                    direction = "STRAIGHT AHEAD"
+                elif 15 < angle <= 45:
+                    direction = "FRONT-LEFT"
+                elif -45 <= angle < -15:
+                    direction = "FRONT-RIGHT"
+                elif angle > 45:
+                    direction = "LEFT"
+                else:
+                    direction = "RIGHT"
+                
                 info_lines.append(
-                    f"Object {i}:\n"
-                    f"  Position: X={obj['center'][0]:.1f}cm, Y={obj['center'][1]:.1f}cm\n"
-                    f"            (X=front/back, Y=left/right)\n"
-                    f"  Distance: {obj['distance']:.1f} cm\n"
-                    f"  Angle:    {obj['angle']:.1f}° (0°=front, 90°=left)\n"
-                    f"  Size:     {obj['radius']*2:.1f} cm diameter\n"
-                    f"  Points:   {obj['points']}\n"
+                    f"#{i} {status}\n"
+                    f"  Dist: {dist:.0f}cm | Angle: {angle:+.1f}°\n"
+                    f"  Direction: {direction}\n"
+                    f"  Position: X={obj['center'][0]:.0f} Y={obj['center'][1]:.0f}cm\n"
+                    f"  Size: {obj['radius']*2:.0f}cm ({obj['points']} pts)\n"
                 )
             
             object_text.set_text('\n'.join(info_lines))
         else:
-            object_text.set_text("DETECTED OBJECTS\n" + "="*50 + "\nNo objects detected")
+            object_text.set_text("DETECTED OBJECTS IN FRONT\n" + "="*50 + "\n\nNo objects detected\n\nClear path ahead ✓")
+            warning_text.set_visible(False)
     
-    return scatter, object_text
+    return scatter, object_text, warning_text
 
 # ----------------------------
 # Main
@@ -359,9 +427,9 @@ if __name__ == "__main__":
         ani = FuncAnimation(fig, update, interval=UPDATE_INTERVAL, blit=False, cache_frame_data=False)
         plt.tight_layout()
         
-        # Add timestamp display
-        import time as time_module
-        fig.suptitle(f'LiDAR Object Detection - Data timeout: {LIDAR_DATA_TIMEOUT}s', fontsize=10)
+        # Add title
+        fig.suptitle(f'LiDAR Object Detection - Front {FRONT_CONE_ANGLE}° Cone | +60° Angle Offset Applied', 
+                     fontsize=12, fontweight='bold')
         
         plt.show()
         
