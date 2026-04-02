@@ -22,6 +22,14 @@ DETECTION_RANGE = (10, 300)  # min and max distance in cm
 FRONT_CONE_ANGLE = 60  # degrees - only process points in this cone (0° = forward)
 FRONT_CONE_CENTER = 0  # degrees - center of the cone
 
+# Robot coordinate system:
+#     +Y (90°, Left)
+#      |
+#      |
+#      +---- +X (0°, Front)
+#     /
+#    / Robot
+
 # ----------------------------
 # Parse LiDAR packet (X3 protocol)
 # ----------------------------
@@ -124,12 +132,18 @@ def filter_front_cone(points, center_angle=FRONT_CONE_CENTER, cone_width=FRONT_C
     return filtered
 
 # ----------------------------
-# Convert polar to Cartesian (in cm)
+# Convert polar to Cartesian (in cm) - Robot frame
 # ----------------------------
 def polar_to_cartesian(angle_deg, distance_cm):
+    """
+    Convert LiDAR polar coordinates to robot frame:
+    - 0° (forward) = +X axis
+    - 90° (left) = +Y axis
+    - Turning left is positive rotation
+    """
     angle_rad = math.radians(angle_deg)
-    x = distance_cm * math.sin(angle_rad)
-    y = distance_cm * math.cos(angle_rad)
+    x = distance_cm * math.cos(angle_rad)  # Front/back
+    y = distance_cm * math.sin(angle_rad)  # Left/right
     return x, y
 
 # ----------------------------
@@ -185,7 +199,7 @@ def detect_objects(point_buffer):
         max_radius = max(math.sqrt((x - center_x)**2 + (y - center_y)**2) for x, y in cluster)
         
         distance_from_robot = math.sqrt(center_x**2 + center_y**2)
-        angle_from_robot = math.degrees(math.atan2(center_x, center_y))
+        angle_from_robot = math.degrees(math.atan2(center_y, center_x))  # atan2(y, x) for robot frame
         if angle_from_robot < 0:
             angle_from_robot += 360
         
@@ -254,9 +268,9 @@ def main():
             if objects:
                 for i, obj in enumerate(objects, 1):
                     print(f"\nObject {i}:")
-                    print(f"  Location:  ({obj['center'][0]:6.1f}, {obj['center'][1]:6.1f}) cm")
+                    print(f"  Location:  X={obj['center'][0]:6.1f}cm (front/back), Y={obj['center'][1]:6.1f}cm (left/right)")
                     print(f"  Distance:  {obj['distance']:5.1f} cm")
-                    print(f"  Angle:     {obj['angle']:6.1f}°")
+                    print(f"  Angle:     {obj['angle']:6.1f}° (0°=front, 90°=left)")
                     print(f"  Size:      {obj['radius']*2:5.1f} cm diameter")
                     print(f"  Points:    {obj['points']}")
                 

@@ -26,6 +26,14 @@ MAX_CLUSTER_SIZE = 100  # maximum points in a cluster
 FRONT_CONE_ANGLE = 60  # degrees - only process points in this cone (0° = forward)
 FRONT_CONE_CENTER = 0  # degrees - center of the cone
 
+# Robot coordinate system:
+#     +Y (90°, Left)
+#      |
+#      |
+#      +---- +X (0°, Front)
+#     /
+#    / Robot
+
 # Store recent points
 point_buffer = deque(maxlen=MAX_POINTS)
 LIDAR_DATA_TIMEOUT = 0.5  # seconds - data older than this is stale
@@ -130,12 +138,18 @@ def read_lidar_data(ser):
             packets_read += 1
 
 # ----------------------------
-# Convert polar to Cartesian (in cm)
+# Convert polar to Cartesian (in cm) - Robot frame
 # ----------------------------
 def polar_to_cartesian(angle_deg, distance_cm):
+    """
+    Convert LiDAR polar coordinates to robot frame:
+    - 0° (forward) = +X axis
+    - 90° (left) = +Y axis
+    - Turning left is positive rotation
+    """
     angle_rad = math.radians(angle_deg)
-    x = distance_cm * math.sin(angle_rad)
-    y = distance_cm * math.cos(angle_rad)
+    x = distance_cm * math.cos(angle_rad)  # Front/back
+    y = distance_cm * math.sin(angle_rad)  # Left/right
     return x, y
 
 # ----------------------------
@@ -202,7 +216,7 @@ def detect_objects():
             max_radius = max(max_radius, radius)
         
         distance_from_robot = math.sqrt(center_x**2 + center_y**2)
-        angle_from_robot = math.degrees(math.atan2(center_x, center_y))
+        angle_from_robot = math.degrees(math.atan2(center_y, center_x))  # atan2(y, x) for robot frame
         
         objects.append({
             'center': (center_x, center_y),
@@ -224,19 +238,23 @@ ax1.set_xlim(-MAX_DISTANCE, MAX_DISTANCE)
 ax1.set_ylim(-MAX_DISTANCE, MAX_DISTANCE)
 ax1.set_aspect('equal')
 ax1.grid(True, alpha=0.3)
-ax1.set_xlabel('X (cm)')
-ax1.set_ylabel('Y (cm)')
-ax1.set_title('Object Detection - Front 60° View')
+ax1.set_xlabel('X (cm) - Front/Back')
+ax1.set_ylabel('Y (cm) - Left/Right')
+ax1.set_title('Object Detection - Robot Frame (Front=+X, Left=+Y)')
 
 # Draw robot at center (15cm radius)
 robot_circle = Circle((0, 0), 15, color='red', fill=True, alpha=0.5)
 ax1.add_patch(robot_circle)
-ax1.arrow(0, 0, 0, 30, head_width=10, head_length=10, fc='red', ec='red')
+# Arrow pointing in +X direction (forward)
+ax1.arrow(0, 0, 30, 0, head_width=10, head_length=10, fc='red', ec='red')
+# Label for orientation
+ax1.text(35, 0, 'FRONT', fontsize=8, color='red', fontweight='bold')
 
 # Draw field of view cone
 import matplotlib.patches as mpatches
-theta1 = 90 - FRONT_CONE_ANGLE/2  # matplotlib uses counter-clockwise from east
-theta2 = 90 + FRONT_CONE_ANGLE/2
+# Cone centered at 0° (+X axis), spanning ±30°
+theta1 = -FRONT_CONE_ANGLE/2  # -30°
+theta2 = FRONT_CONE_ANGLE/2   # +30°
 wedge = mpatches.Wedge((0, 0), MAX_DISTANCE, theta1, theta2, 
                        alpha=0.1, color='yellow', label='Detection Zone')
 ax1.add_patch(wedge)
@@ -305,9 +323,10 @@ def update(frame):
             for i, obj in enumerate(sorted(objects, key=lambda o: o['distance']), 1):
                 info_lines.append(
                     f"Object {i}:\n"
-                    f"  Position: ({obj['center'][0]:.1f}, {obj['center'][1]:.1f}) cm\n"
+                    f"  Position: X={obj['center'][0]:.1f}cm, Y={obj['center'][1]:.1f}cm\n"
+                    f"            (X=front/back, Y=left/right)\n"
                     f"  Distance: {obj['distance']:.1f} cm\n"
-                    f"  Angle:    {obj['angle']:.1f}°\n"
+                    f"  Angle:    {obj['angle']:.1f}° (0°=front, 90°=left)\n"
                     f"  Size:     {obj['radius']*2:.1f} cm diameter\n"
                     f"  Points:   {obj['points']}\n"
                 )
