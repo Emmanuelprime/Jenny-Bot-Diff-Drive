@@ -252,18 +252,21 @@ def update(frame):
     object_circles.clear()
     
     if len(point_buffer) > 0:
-        # Plot all points
+        # Filter to front cone for both display and detection
+        front_points = filter_front_cone(list(point_buffer))
+        
+        # Plot only front cone points
         x_coords = []
         y_coords = []
         
-        for angle_deg, distance in point_buffer:
+        for angle_deg, distance in front_points:
             x, y = polar_to_cartesian(angle_deg, distance)
             x_coords.append(x)
             y_coords.append(y)
         
         scatter.set_offsets(np.c_[x_coords, y_coords])
         
-        # Detect objects
+        # Detect objects (uses same filtered points internally)
         objects = detect_objects()
         
         # Draw object circles
