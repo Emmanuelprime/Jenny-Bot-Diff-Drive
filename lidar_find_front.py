@@ -1,5 +1,6 @@
 import serial
 import time
+from collections import defaultdict
 
 PORT = "/dev/ttyUSB0"
 BAUDRATE = 115200
@@ -40,16 +41,19 @@ def parse_packet(packet_bytes):
     
     return start_angle, points
 
+def group_angle(angle, bin_size=10):
+    """Group angles into 10-degree bins for counting"""
+    return int(angle / bin_size) * bin_size
+
 print("="*70)
-print("LIDAR REAL-TIME ANGLE TEST")
+print("LIDAR FRONT ANGLE FINDER")
 print("="*70)
 print()
 print("INSTRUCTIONS:")
 print("1. Clear area around robot (remove close objects)")
 print("2. Place ONE object at 40-60cm directly IN FRONT of robot")
-print("3. Watch for 'Front object candidate' lines")
-print("4. Note the ANGLE shown - that's where LiDAR thinks front is")
-print("5. Press Ctrl+C to stop")
+print("3. Let it scan for 10 seconds")
+print("4. The angle that appears MOST OFTEN is your front")
 print()
 print("="*70)
 print()
@@ -57,12 +61,17 @@ print()
 ser = serial.Serial(PORT, BAUDRATE, timeout=1)
 time.sleep(1)
 
-print("Scanning... (showing objects 10-300cm away)")
-print()
+# Accumulate detections by angle
+angle_counts = defaultdict(int)
+angle_distances = defaultdict(list)
+scan_duration = 10  # seconds
+start_time = time.time()
+
+print(f"Scanning for {scan_duration} seconds...")
+print("(Progress: ", end="", flush=True)
 
 try:
-    update_counter = 0
-    while True:
+    while time.time() - start_time < scan_duration:
         byte = ser.read(1)
         if not byte:
             continue
@@ -85,32 +94,62 @@ try:
             full_packet = bytearray([0xAA, 0x55]) + header + data
             start_angle, points = parse_packet(full_packet)
             
-            if start_angle is not None and len(points) > 0:
-                update_counter += 1
-                
-                # Show every 5th update
-                if update_counter % 5 == 0:
-                    # Filter to likely candidate range (30-80cm for 50cm object)
-                    candidates = [p for p in points if 30 < p[1] < 80]
-                    
-                    if candidates:
-                        # Find closest in candidate range
-                        closest = min(candidates, key=lambda p: p[1])
-                        angle, dist, qual = closest
-                        print(f"Front object candidate: {dist:6.1f}cm at angle {angle:6.1f}° (Q:{qual:3d})")
-                    else:
-                        # Show all points for debugging
-                        if len(points) > 0:
-                            for angle, dist, qual in sorted(points, key=lambda p: p[1])[:3]:
-                                print(f"  Detected: {dist:6.1f}cm at {angle:6.1f}° (Q:{qual:3d})")
-
-except KeyboardInterrupt:
-    print("\n\nStopped")
+            if start_angle is not None:
+                # Count detections in target range
+                for angle, dist, qual in points:
+                    if 30 < dist < 80:  # Target range for front object
+                        angle_bin = group_angle(angle, 10)
+                        angle_counts[angle_bin] += 1
+                        angle_distances[angle_bin].append(dist)
+        
+        # Show progress
+        elapsed = time.time() - start_time
+        if int(elapsed) % 2 == 0 and int(elapsed * 10) % 10 == 0:
+            print(".", end="", flush=True)
+    
+    print(" Done!)\n")
     print()
     print("="*70)
-    print("NEXT STEP:")
-    print("  Note the angle where you saw the front object")
-    print("  We'll use this to set the correct angle offset")
+    print("RESULTS: Objects detected at 30-80cm range")
     print("="*70)
+    print()
+    
+    # Sort by frequency
+    sorted_angles = sorted(angle_counts.items(), key=lambda x: x[1], reverse=True)
+    
+    if sorted_angles:
+        print(f"{'Angle Range':<15} {'Detections':<12} {'Avg Distance':<15}")
+        print("-" * 45)
+        
+        for angle_bin, count in sorted_angles[:10]:  # Top 10
+            avg_dist = sum(angle_distances[angle_bin]) / len(angle_distances[angle_bin])
+            print(f"{angle_bin:3d}°-{angle_bin+9:3d}°     {count:6d}         {avg_dist:5.1f}cm")
+        
+        print()
+        print("="*70)
+        most_common_angle = sorted_angles[0][0]
+        avg_distance = sum(angle_distances[most_common_angle]) / len(angle_distances[most_common_angle])
+        
+        print(f"MOST FREQUENT ANGLE: {most_common_angle}°-{most_common_angle+9}° ({sorted_angles[0][1]} detections)")
+        print(f"Average distance: {avg_distance:.1f}cm")
+        print()
+        
+        # Calculate offset needed to bring this angle to 0°
+        offset = -most_common_angle
+        if offset < -180:
+            offset += 360
+        elif offset > 180:
+            offset -= 360
+        
+        print(f"Suggested LIDAR_ANGLE_OFFSET: {offset}°")
+        print(f"(Add this offset to all angles to align LiDAR front with robot front)")
+        print()
+    else:
+        print("No objects detected in 30-80cm range!")
+        print("Make sure object is placed directly in front.")
+        print()
+
+except KeyboardInterrupt:
+    print("\n\nStopped early")
 finally:
     ser.close()
