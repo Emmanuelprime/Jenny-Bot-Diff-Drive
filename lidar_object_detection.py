@@ -28,6 +28,7 @@ FRONT_CONE_CENTER = 0  # degrees - center of the cone
 
 # Store recent points
 point_buffer = deque(maxlen=MAX_POINTS)
+LIDAR_DATA_TIMEOUT = 0.5  # seconds - data older than this is stale
 
 # ----------------------------
 # Parse LiDAR packet (X3 protocol)
@@ -78,8 +79,13 @@ def filter_front_cone(points, center_angle=FRONT_CONE_CENTER, cone_width=FRONT_C
     """
     filtered = []
     half_cone = cone_width / 2.0
+    current_time = time.time()
     
-    for angle, distance in points:
+    for angle, distance, timestamp in points:
+        # Skip stale data
+        if current_time - timestamp > LIDAR_DATA_TIMEOUT:
+            continue
+        
         # Calculate angle difference (handle wraparound)
         angle_diff = abs((angle - center_angle + 180) % 360 - 180)
         if angle_diff <= half_cone:
@@ -92,6 +98,7 @@ def filter_front_cone(points, center_angle=FRONT_CONE_CENTER, cone_width=FRONT_C
 # ----------------------------
 def read_lidar_data(ser):
     packets_read = 0
+    current_time = time.time()
     
     while packets_read < PACKETS_PER_UPDATE:  # Read multiple packets for faster updates
         byte = ser.read(1)
@@ -118,7 +125,7 @@ def read_lidar_data(ser):
             
             if start_angle is not None:
                 for angle, distance, quality in points:
-                    point_buffer.append((angle, distance))
+                    point_buffer.append((angle, distance, current_time))
             
             packets_read += 1
 
@@ -329,6 +336,11 @@ if __name__ == "__main__":
         
         ani = FuncAnimation(fig, update, interval=UPDATE_INTERVAL, blit=False, cache_frame_data=False)
         plt.tight_layout()
+        
+        # Add timestamp display
+        import time as time_module
+        fig.suptitle(f'LiDAR Object Detection - Data timeout: {LIDAR_DATA_TIMEOUT}s', fontsize=10)
+        
         plt.show()
         
     except KeyboardInterrupt:

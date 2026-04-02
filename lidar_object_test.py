@@ -10,6 +10,7 @@ PORT = "/dev/ttyUSB0"
 BAUDRATE = 115200
 DISTANCE_SCALE = 0.001  # mm to meters (internal)
 MAX_POINTS = 1000
+LIDAR_DATA_TIMEOUT = 0.5  # seconds - data older than this is stale
 
 # Object detection parameters
 CLUSTER_DISTANCE_THRESHOLD = 15  # cm
@@ -64,6 +65,7 @@ def parse_packet(packet_bytes):
 def collect_scan(ser, num_packets=50):
     point_buffer = []
     packets_read = 0
+    scan_time = time.time()
     
     while packets_read < num_packets:
         byte = ser.read(1)
@@ -90,7 +92,7 @@ def collect_scan(ser, num_packets=50):
             
             if start_angle is not None:
                 for angle, distance, quality in points:
-                    point_buffer.append((angle, distance))
+                    point_buffer.append((angle, distance, scan_time))
             
             packets_read += 1
     
@@ -107,8 +109,13 @@ def filter_front_cone(points, center_angle=FRONT_CONE_CENTER, cone_width=FRONT_C
     """
     filtered = []
     half_cone = cone_width / 2.0
+    current_time = time.time()
     
-    for angle, distance in points:
+    for angle, distance, timestamp in points:
+        # Skip stale data
+        if current_time - timestamp > LIDAR_DATA_TIMEOUT:
+            continue
+        
         # Calculate angle difference (handle wraparound)
         angle_diff = abs((angle - center_angle + 180) % 360 - 180)
         if angle_diff <= half_cone:
