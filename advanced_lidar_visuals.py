@@ -35,6 +35,7 @@ ANGLE_TOLERANCE = 5.0  # Degrees tolerance for wall alignment
 CLUSTER_EPS = 0.2  # DBSCAN epsilon (meters) - maximum distance between points in same cluster
 MIN_CLUSTER_SIZE = 5  # Minimum points to form an obstacle
 OBSTACLE_MIN_SIZE = 0.1  # Minimum obstacle size (meters)
+MAX_OBSTACLE_DISTANCE = 1.0  # Maximum distance to detect obstacles (meters) - 100 cm
 
 # Store recent points and processed data
 point_buffer = deque(maxlen=MAX_POINTS)
@@ -172,19 +173,25 @@ def detect_walls(points):
     return walls
 
 # ----------------------------
-# Obstacle Detection
+# Obstacle Detection (Modified with distance limit)
 # ----------------------------
 def detect_obstacles(points):
-    """Detect obstacles using DBSCAN clustering"""
+    """Detect obstacles using DBSCAN clustering within MAX_OBSTACLE_DISTANCE"""
     if len(points) < MIN_CLUSTER_SIZE:
         return []
     
-    # Convert to Cartesian coordinates
+    # Convert to Cartesian coordinates and filter by distance
     cartesian_coords = []
+    
     for angle, dist, quality in points:
-        x = dist * np.cos(np.radians(angle))
-        y = dist * np.sin(np.radians(angle))
-        cartesian_coords.append([x, y])
+        # Only process points within MAX_OBSTACLE_DISTANCE
+        if dist <= MAX_OBSTACLE_DISTANCE:
+            x = dist * np.cos(np.radians(angle))
+            y = dist * np.sin(np.radians(angle))
+            cartesian_coords.append([x, y])
+    
+    if len(cartesian_coords) < MIN_CLUSTER_SIZE:
+        return []
     
     cartesian_coords = np.array(cartesian_coords)
     
@@ -326,11 +333,17 @@ ax2.set_aspect('equal')
 ax2.grid(True, alpha=0.3)
 ax2.set_xlabel('X (meters)', fontsize=12)
 ax2.set_ylabel('Y (meters)', fontsize=12)
-ax2.set_title('Processed Scan with Walls & Obstacles', pad=20, fontsize=14, fontweight='bold')
+ax2.set_title(f'Processed Scan (Obstacles within {MAX_OBSTACLE_DISTANCE}m)', pad=20, fontsize=14, fontweight='bold')
 
 # Add sensor position marker
 sensor_marker = Circle((0, 0), 0.05, color='red', alpha=0.8, label='LiDAR')
 ax2.add_patch(sensor_marker)
+
+# Add obstacle detection range circle
+obstacle_range_circle = Circle((0, 0), MAX_OBSTACLE_DISTANCE, fill=False, 
+                               edgecolor='orange', linestyle='--', alpha=0.5, 
+                               label=f'Obstacle Range ({MAX_OBSTACLE_DISTANCE}m)')
+ax2.add_patch(obstacle_range_circle)
 
 # Initialize visualization elements
 scatter_raw = ax1.scatter([], [], c='blue', s=2, alpha=0.6, label='Raw Points')
@@ -404,29 +417,33 @@ def update(frame):
             obstacle_patches.append(circle)
             
             # Add distance label
-            if obs['distance'] < MAX_DISTANCE * 0.8:
-                label = ax2.annotate(f"{obs['distance']:.1f}m", 
-                                   xy=center, xytext=(5, 5), 
-                                   textcoords='offset points',
-                                   fontsize=8, color='orange',
-                                   bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
-                obstacle_patches.append(label)
+            label = ax2.annotate(f"{obs['distance']:.1f}m", 
+                               xy=center, xytext=(5, 5), 
+                               textcoords='offset points',
+                               fontsize=8, color='orange',
+                               bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+            obstacle_patches.append(label)
+        
+        # Count points within obstacle range
+        points_in_range = np.sum(distances <= MAX_OBSTACLE_DISTANCE)
         
         # Update info text
-        info_text.set_text(f"Points: {len(points_array)}\n"
+        info_text.set_text(f"Total Points: {len(points_array)}\n"
+                          f"Points in Range: {points_in_range}\n"
                           f"Walls: {len(wall_segments)}\n"
                           f"Obstacles: {len(obstacles)}\n"
                           f"Range: {distances.min():.2f}-{distances.max():.2f}m")
     
     # Update legend
-    if len(wall_segments) > 0 or len(obstacles) > 0:
-        legend_elements = [sensor_marker, 
-                         plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='green', 
-                                  markersize=5, label='Filtered Points'),
-                         plt.Line2D([0], [0], color='red', linewidth=3, label='Walls'),
-                         plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='orange', 
-                                  markersize=8, label='Obstacles')]
-        ax2.legend(handles=legend_elements, loc='upper right')
+    legend_elements = [sensor_marker, 
+                      plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='green', 
+                               markersize=5, label='Filtered Points'),
+                      plt.Line2D([0], [0], color='red', linewidth=3, label='Walls'),
+                      plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='orange', 
+                               markersize=8, label='Obstacles'),
+                      plt.Line2D([0], [0], color='orange', linestyle='--', 
+                               label=f'Obstacle Range ({MAX_OBSTACLE_DISTANCE}m)')]
+    ax2.legend(handles=legend_elements, loc='upper right')
     
     return scatter_raw, scatter_filtered
 
@@ -440,7 +457,8 @@ if __name__ == "__main__":
         print("→ Starting advanced visualization...")
         print("  • Green points: Filtered LiDAR data")
         print("  • Red lines: Detected walls")
-        print("  • Orange circles: Detected obstacles")
+        print(f"  • Orange circles: Detected obstacles (within {MAX_OBSTACLE_DISTANCE}m)")
+        print("  • Dashed orange circle: Obstacle detection range")
         print("→ Close window to stop.")
         
         ani = FuncAnimation(fig, update, interval=50, blit=False, cache_frame_data=False)
